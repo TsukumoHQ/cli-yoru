@@ -1,0 +1,23 @@
+[project]
+name = "receipt-cli"
+version = "0.1.0"
+description = "Receipt — audit-grade session receipts for autonomous AI coding agents."
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.27"]
+
+[project.scripts]
+receipt = "receipt_cli.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/receipt_cli"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
