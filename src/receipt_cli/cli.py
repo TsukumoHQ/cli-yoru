@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from . import __version__
-from . import config, init_cmd, tail_cmd
+from . import config, doctor_cmd, init_cmd, tail_cmd
 
 DEFAULT_SERVER = "http://localhost:8002"
 
@@ -19,7 +19,7 @@ def _build_parser() -> argparse.ArgumentParser:
         version=f"receipt {__version__}",
     )
 
-    subparsers = parser.add_subparsers(dest="cmd", required=True, metavar="{init,tail}")
+    subparsers = parser.add_subparsers(dest="cmd", required=True, metavar="{init,tail,doctor}")
 
     p_init = subparsers.add_parser(
         "init",
@@ -41,6 +41,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_tail.add_argument("--session-id", default=None, help="Session id to stamp on events missing one.")
 
+    subparsers.add_parser(
+        "doctor",
+        help="Diagnose the install: config, backend, token, hook.",
+    )
+
     return parser
 
 
@@ -56,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         return init_cmd.run(args)
     if args.cmd == "tail":
         return tail_cmd.run(args)
+    if args.cmd == "doctor":
+        return doctor_cmd.run(args)
 
     parser.error(f"unknown command: {args.cmd!r}")
     return 2
