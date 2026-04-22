@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from receipt_cli.init_cmd import _merge_settings_json
+from yoru_cli.init_cmd import _merge_settings_json
 
 
 def _load(path: Path) -> dict:
@@ -17,13 +17,13 @@ def _receipt_entries(settings: dict) -> list[dict]:
         if isinstance(e, dict)
         and e.get("hooks")
         and isinstance(e["hooks"][0], dict)
-        and str(e["hooks"][0].get("command", "")).endswith("receipt.sh")
+        and str(e["hooks"][0].get("command", "")).endswith("yoru.sh")
     ]
 
 
 def test_creates_fresh_settings_when_absent(tmp_path: Path) -> None:
     settings_path = tmp_path / ".claude" / "settings.json"
-    hook_path = tmp_path / ".claude" / "hooks" / "receipt.sh"
+    hook_path = tmp_path / ".claude" / "hooks" / "yoru.sh"
 
     _merge_settings_json(settings_path, hook_path)
 
@@ -35,12 +35,12 @@ def test_creates_fresh_settings_when_absent(tmp_path: Path) -> None:
     assert entry["matcher"] == "*"
     assert entry["hooks"][0]["type"] == "command"
     assert entry["hooks"][0]["command"] == str(hook_path)
-    assert entry["hooks"][0]["command"].endswith("receipt.sh")
+    assert entry["hooks"][0]["command"].endswith("yoru.sh")
 
 
 def test_preserves_user_hooks(tmp_path: Path) -> None:
     settings_path = tmp_path / ".claude" / "settings.json"
-    hook_path = tmp_path / ".claude" / "hooks" / "receipt.sh"
+    hook_path = tmp_path / ".claude" / "hooks" / "yoru.sh"
 
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     seeded = {
@@ -72,7 +72,7 @@ def test_preserves_user_hooks(tmp_path: Path) -> None:
 
 def test_idempotent_on_double_run(tmp_path: Path) -> None:
     settings_path = tmp_path / ".claude" / "settings.json"
-    hook_path = tmp_path / ".claude" / "hooks" / "receipt.sh"
+    hook_path = tmp_path / ".claude" / "hooks" / "yoru.sh"
 
     _merge_settings_json(settings_path, hook_path)
     first = settings_path.read_text(encoding="utf-8")
@@ -86,7 +86,7 @@ def test_idempotent_on_double_run(tmp_path: Path) -> None:
 
 def test_registers_session_lifecycle_matchers(tmp_path: Path) -> None:
     settings_path = tmp_path / ".claude" / "settings.json"
-    hook_path = tmp_path / ".claude" / "hooks" / "receipt.sh"
+    hook_path = tmp_path / ".claude" / "hooks" / "yoru.sh"
 
     _merge_settings_json(settings_path, hook_path)
 
@@ -100,7 +100,7 @@ def test_registers_session_lifecycle_matchers(tmp_path: Path) -> None:
             if isinstance(e, dict)
             and e.get("hooks")
             and isinstance(e["hooks"][0], dict)
-            and str(e["hooks"][0].get("command", "")).endswith("receipt.sh")
+            and str(e["hooks"][0].get("command", "")).endswith("yoru.sh")
         ]
         assert len(receipt_entries) == 1, f"{event_name} should have 1 receipt entry"
         assert receipt_entries[0]["hooks"][0]["command"] == str(hook_path)
@@ -108,8 +108,8 @@ def test_registers_session_lifecycle_matchers(tmp_path: Path) -> None:
 
 def test_replaces_stale_receipt_entry_on_force(tmp_path: Path) -> None:
     settings_path = tmp_path / ".claude" / "settings.json"
-    new_hook = tmp_path / ".claude" / "hooks" / "receipt.sh"
-    stale_command = "/old/location/receipt.sh"
+    new_hook = tmp_path / ".claude" / "hooks" / "yoru.sh"
+    stale_command = "/old/location/yoru.sh"
 
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     seeded = {

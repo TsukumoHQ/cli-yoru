@@ -1,10 +1,10 @@
-"""`receipt doctor` — diagnostic subcommand.
+"""`yoru doctor` — diagnostic subcommand.
 
 Read-only check of the install:
   1. config.json present                   → else exit 1
   2. backend /health/ready reachable       → else exit 2
   3. hook-token valid (GET /hook-tokens)   → else exit 3 on 401
-  4. ~/.claude/hooks/receipt.sh is 0755    → else exit 4
+  4. ~/.claude/hooks/yoru.sh is 0755    → else exit 4
 
 Prints ✓ lines to stdout on success (exit 0). Failures go to stderr with a
 short human-readable reason. No fixes attempted.
@@ -28,19 +28,19 @@ def _token_suffix(token: str) -> str:
 
 
 def _hook_path() -> Path:
-    return Path.home() / ".claude" / "hooks" / "receipt.sh"
+    return Path.home() / ".claude" / "hooks" / "yoru.sh"
 
 
 def run(args: argparse.Namespace) -> int:  # noqa: ARG001 — argparse hands args, unused for now
     # 1. config
     cfg = config.load()
     if cfg is None:
-        print("receipt init not run", file=sys.stderr)
+        print("yoru init not run", file=sys.stderr)
         return 1
     server = (cfg.get("server") or "").rstrip("/")
     token = cfg.get("token") or ""
     if not server or not token:
-        print("receipt init not run", file=sys.stderr)
+        print("yoru init not run", file=sys.stderr)
         return 1
 
     # 2. backend /health/ready
@@ -85,8 +85,8 @@ def run(args: argparse.Namespace) -> int:  # noqa: ARG001 — argparse hands arg
 
     # all green
     user = cfg.get("user") or "authenticated"
-    print(f"\u2713 config at ~/.config/receipt/config.json (token {_token_suffix(token)})")
+    print(f"\u2713 config at ~/.config/yoru/config.json (token {_token_suffix(token)})")
     print(f"\u2713 backend {server} reachable")
     print(f"\u2713 hook-token valid (user: {user})")
-    print("\u2713 hook installed at ~/.claude/hooks/receipt.sh")
+    print("\u2713 hook installed at ~/.claude/hooks/yoru.sh")
     return 0

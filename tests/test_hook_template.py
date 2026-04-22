@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from receipt_cli.hook_template import HOOK_SCRIPT
+from yoru_cli.hook_template import HOOK_SCRIPT
 
 
 def test_hook_script_has_bash_shebang() -> None:
@@ -21,5 +21,5 @@ def test_hook_script_skips_agent_relay_children_before_cfg_read() -> None:
     gate = '[ "${AGENT_RELAY_CHILD:-0}" = "1" ] && exit 0'
     assert gate in HOOK_SCRIPT, "env gate missing from hook template"
     gate_idx = HOOK_SCRIPT.index(gate)
-    cfg_idx = HOOK_SCRIPT.index('CFG="${HOME}/.config/receipt/config.json"')
+    cfg_idx = HOOK_SCRIPT.index('CFG="${HOME}/.config/yoru/config.json"')
     assert gate_idx < cfg_idx, "env gate must come BEFORE the CFG read"

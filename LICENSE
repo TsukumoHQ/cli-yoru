@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Receipt authors
+Copyright (c) 2026 Yoru authors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,8 +22,8 @@ SOFTWARE.
 
 ─────────────────────────────────────────────────────────────────────────
 
-SCOPE: The Receipt CLI — everything inside the `receipt-cli/` directory in
-the Receipt monorepo. The CLI is intentionally MIT so it can be freely
+SCOPE: The Yoru CLI — everything inside the `yoru-cli/` directory in
+the Yoru monorepo. The CLI is intentionally MIT so it can be freely
 embedded in proprietary dev environments, CI pipelines, internal tooling,
 and closed-source forks without viral license obligations.
 

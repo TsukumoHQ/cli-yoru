@@ -5,32 +5,32 @@ import argparse
 from . import __version__
 from . import config, doctor_cmd, init_cmd, tail_cmd
 
-DEFAULT_SERVER = "https://api.receipt.dev"
+DEFAULT_SERVER = "https://api.yoru.sh"
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="receipt",
-        description="Receipt — audit-grade session receipts for autonomous AI coding agents.",
+        prog="yoru",
+        description="Yoru — audit-grade session receipts for autonomous AI coding agents.",
     )
     parser.add_argument(
         "--version",
         action="version",
-        version=f"receipt {__version__}",
+        version=f"yoru {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="cmd", required=True, metavar="{init,tail,doctor}")
 
     p_init = subparsers.add_parser(
         "init",
-        help="Install the Claude Code hook and write ~/.config/receipt/config.json.",
+        help="Install the Claude Code hook and write ~/.config/yoru/config.json.",
     )
     p_init.add_argument("--server", default=DEFAULT_SERVER, help=f"Backend URL (default: {DEFAULT_SERVER})")
     p_init.add_argument(
         "--token",
         default=None,
         help="Pre-minted hook token (rcpt_...) — for headless/CI/server setups. "
-             "Also read from $RECEIPT_TOKEN. Without this, receipt init launches "
+             "Also read from $YORU_TOKEN. Without this, yoru init launches "
              "interactive device pairing.",
     )
     p_init.add_argument(

@@ -61,7 +61,7 @@ def _merge_settings_json(settings_path: Path, hook_path: Path) -> None:
         if not isinstance(first, dict):
             return False
         cmd = first.get("command")
-        return isinstance(cmd, str) and cmd.endswith("receipt.sh")
+        return isinstance(cmd, str) and cmd.endswith("yoru.sh")
 
     for event_name, matcher_glob in RECEIPT_MATCHERS:
         entries = hooks.setdefault(event_name, [])
@@ -106,7 +106,7 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
     interval = int(start.get("interval", 2))
 
     print()
-    print(f"  Pair this device with your Receipt account:")
+    print(f"  Pair this device with your Yoru account:")
     print(f"    1. Open  {verify_uri}")
     print(f"    2. Enter {user_code}")
     print()
@@ -132,14 +132,14 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
             print(f"  ✓ Paired as {label}")
             return token
         if s in ("expired", "denied"):
-            print(f"\nerror: pairing {s} — re-run `receipt init`", file=sys.stderr)
+            print(f"\nerror: pairing {s} — re-run `yoru init`", file=sys.stderr)
             return None
         # pending — sleep and keep polling
         sys.stdout.write("  waiting for approval…\r")
         sys.stdout.flush()
         time.sleep(interval)
 
-    print("\nerror: pairing timed out — re-run `receipt init`", file=sys.stderr)
+    print("\nerror: pairing timed out — re-run `yoru init`", file=sys.stderr)
     return None
 
 
@@ -150,9 +150,9 @@ def run(args: argparse.Namespace) -> int:
 
     server: str = args.server
     token: str | None = getattr(args, "token", None)
-    # Also accept RECEIPT_TOKEN from env for headless / CI / server deployments.
+    # Also accept YORU_TOKEN from env for headless / CI / server deployments.
     if not token:
-        token = os.environ.get("RECEIPT_TOKEN", "").strip() or None
+        token = os.environ.get("YORU_TOKEN", "").strip() or None
 
     if not token:
         label = (getattr(args, "label", None) or "").strip() or _default_label()
@@ -168,7 +168,7 @@ def run(args: argparse.Namespace) -> int:
     })
 
     hook_dir = Path.home() / ".claude" / "hooks"
-    hook_path = hook_dir / "receipt.sh"
+    hook_path = hook_dir / "yoru.sh"
     os.makedirs(hook_dir, exist_ok=True)
     hook_path.write_text(HOOK_SCRIPT, encoding="utf-8")
     os.chmod(hook_path, 0o755)
@@ -176,8 +176,8 @@ def run(args: argparse.Namespace) -> int:
     settings_path = Path.home() / ".claude" / "settings.json"
     _merge_settings_json(settings_path, hook_path)
 
-    print("\u2713 config   \u2192 ~/.config/receipt/config.json")
-    print("\u2713 hook     \u2192 ~/.claude/hooks/receipt.sh")
+    print("\u2713 config   \u2192 ~/.config/yoru/config.json")
+    print("\u2713 hook     \u2192 ~/.claude/hooks/yoru.sh")
     print("\u2713 settings \u2192 ~/.claude/settings.json (hook registered)")
     print("Next: run Claude Code normally; first event streams to /sessions/events.")
     return 0

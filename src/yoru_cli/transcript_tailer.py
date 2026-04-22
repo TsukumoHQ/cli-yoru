@@ -33,8 +33,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 _PROJECTS_DIR = Path.home() / ".claude/projects"
-_CONFIG_PATH = Path.home() / ".config/receipt/config.json"
-_STATE_PATH = Path.home() / ".config/receipt/tail-state.json"
+_CONFIG_PATH = Path.home() / ".config/yoru/config.json"
+_STATE_PATH = Path.home() / ".config/yoru/tail-state.json"
 _POLL_INTERVAL_SEC = 1.0
 _RESCAN_INTERVAL_SEC = 5.0
 
@@ -70,7 +70,7 @@ def _save_state(state: dict[str, int]) -> None:
 
 
 def _post(server: str, token: str, event: dict[str, Any]) -> None:
-    """One-event ingest. Silent on non-2xx; we never block on Receipt outages."""
+    """One-event ingest. Silent on non-2xx; we never block on Yoru outages."""
     _post_batch(server, token, [event])
 
 
@@ -414,8 +414,8 @@ def backfill_all(wipe: bool = True) -> None:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(
-        prog="receipt-tailer",
-        description="Stream Claude Code assistant messages into Receipt.",
+        prog="yoru-tailer",
+        description="Stream Claude Code assistant messages into Yoru.",
     )
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("run", help="follow every transcript live (default)")

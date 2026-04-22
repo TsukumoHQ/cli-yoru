@@ -1,4 +1,4 @@
-"""Bundled Claude Code hook script — written verbatim by `receipt init`.
+"""Bundled Claude Code hook script — written verbatim by `yoru init`.
 
 Shape is frozen in vault/CLI-V0-DESIGN.md §4. Bash (not Python) for fast startup;
 `curl --max-time 2 || true` keeps the hook from ever blocking the agent.
@@ -21,10 +21,10 @@ HOOK_SCRIPT: str = """#!/usr/bin/env bash
 set -euo pipefail
 # Skip events when AGENT_RELAY_CHILD=1 (agent-relay-spawned children — prevents dashboard noise)
 [ "${AGENT_RELAY_CHILD:-0}" = "1" ] && exit 0
-CFG="${HOME}/.config/receipt/config.json"
+CFG="${HOME}/.config/yoru/config.json"
 [ -r "$CFG" ] || exit 0          # silent no-op if uninstalled
-SERVER=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/receipt/config.json")))["server"])')
-TOKEN=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/receipt/config.json")))["token"])')
+SERVER=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/yoru/config.json")))["server"])')
+TOKEN=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/yoru/config.json")))["token"])')
 # Claude Code pipes the hook event as JSON on stdin. We parse the original
 # payload, attach it verbatim to `raw` (so the backend sees tool_input /
 # tool_response — Pydantic drops unknown top-level fields otherwise), then
@@ -108,7 +108,7 @@ curl -sS --max-time 2 -X POST "${SERVER}/api/v1/sessions/events" \\
 
 # Hook subscriptions to write into ~/.claude/settings.json.
 # Each entry is a (hook_event_name, description) pair; the installer writes a
-# single `matcher:"*"` entry per event pointing at ~/.claude/hooks/receipt.sh.
+# single `matcher:"*"` entry per event pointing at ~/.claude/hooks/yoru.sh.
 HOOK_SUBSCRIPTIONS: list[tuple[str, str]] = [
     ("SessionStart",     "capture session boundary"),
     ("UserPromptSubmit", "capture user prompts (message events)"),

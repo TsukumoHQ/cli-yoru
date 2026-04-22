@@ -8,7 +8,7 @@ import pytest
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "receipt_cli", *args],
+        [sys.executable, "-m", "yoru_cli", *args],
         capture_output=True,
         text=True,
         check=False,
@@ -26,7 +26,7 @@ def test_help_lists_both_subcommands() -> None:
 def test_version_prints_expected_string() -> None:
     result = _run("--version")
     assert result.returncode == 0
-    assert "receipt 0.1.0" in (result.stdout + result.stderr)
+    assert "yoru 0.1.0" in (result.stdout + result.stderr)
 
 
 @pytest.mark.parametrize("sub", ["init", "tail"])

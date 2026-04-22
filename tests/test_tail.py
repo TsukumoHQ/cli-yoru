@@ -16,14 +16,14 @@ class _FakeResp:
 
 def _seed_config(monkeypatch, tmp_path, token: str = "rcpt_TOK") -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    from receipt_cli import config
+    from yoru_cli import config
 
     config.save({"server": "http://fake", "token": token})
 
 
 def test_tail_posts_single_line_event(monkeypatch, tmp_path, capsys):
     _seed_config(monkeypatch, tmp_path)
-    from receipt_cli import tail_cmd
+    from yoru_cli import tail_cmd
 
     captured: dict = {}
 
@@ -33,7 +33,7 @@ def test_tail_posts_single_line_event(monkeypatch, tmp_path, capsys):
         captured["headers"] = headers
         return _FakeResp(status=202)
 
-    monkeypatch.setattr("receipt_cli.api.httpx.post", fake_post)
+    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
     monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"s1","user":"dev","kind":"tool_use"}\n'))
 
     rc = tail_cmd.run(_args())
@@ -47,7 +47,7 @@ def test_tail_posts_single_line_event(monkeypatch, tmp_path, capsys):
 
 def test_tail_accepts_json_array(monkeypatch, tmp_path):
     _seed_config(monkeypatch, tmp_path)
-    from receipt_cli import tail_cmd
+    from yoru_cli import tail_cmd
 
     captured: dict = {}
 
@@ -55,7 +55,7 @@ def test_tail_accepts_json_array(monkeypatch, tmp_path):
         captured["json"] = json
         return _FakeResp(status=202, text="")
 
-    monkeypatch.setattr("receipt_cli.api.httpx.post", fake_post)
+    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
     payload = '[{"session_id":"s1","user":"dev","kind":"tool_use"},{"session_id":"s1","user":"dev","kind":"tool_use"}]'
     monkeypatch.setattr("sys.stdin", io.StringIO(payload))
 
@@ -66,7 +66,7 @@ def test_tail_accepts_json_array(monkeypatch, tmp_path):
 
 def test_tail_session_id_flag_overrides(monkeypatch, tmp_path):
     _seed_config(monkeypatch, tmp_path)
-    from receipt_cli import tail_cmd
+    from yoru_cli import tail_cmd
 
     captured: dict = {}
 
@@ -74,7 +74,7 @@ def test_tail_session_id_flag_overrides(monkeypatch, tmp_path):
         captured["json"] = json
         return _FakeResp(status=202, text="")
 
-    monkeypatch.setattr("receipt_cli.api.httpx.post", fake_post)
+    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO('{"session_id":"s-orig","user":"dev","kind":"tool_use"}\n'),
@@ -87,12 +87,12 @@ def test_tail_session_id_flag_overrides(monkeypatch, tmp_path):
 
 def test_tail_4xx_returns_3(monkeypatch, tmp_path):
     _seed_config(monkeypatch, tmp_path)
-    from receipt_cli import tail_cmd
+    from yoru_cli import tail_cmd
 
     def fake_post(url, json=None, headers=None, timeout=None):
         return _FakeResp(status=400, text="bad request")
 
-    monkeypatch.setattr("receipt_cli.api.httpx.post", fake_post)
+    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
     monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"s1","user":"dev","kind":"tool_use"}\n'))
 
     rc = tail_cmd.run(_args())
@@ -101,7 +101,7 @@ def test_tail_4xx_returns_3(monkeypatch, tmp_path):
 
 def test_tail_no_config_no_server_returns_2(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    from receipt_cli import tail_cmd
+    from yoru_cli import tail_cmd
 
     monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"s1","user":"dev","kind":"tool_use"}\n'))
     rc = tail_cmd.run(_args())

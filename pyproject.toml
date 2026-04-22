@@ -1,11 +1,11 @@
 [project]
-name = "receipt-cli"
+name = "yoru-cli"
 version = "0.1.0"
-description = "Receipt — audit-grade session receipts for autonomous AI coding agents."
+description = "Yoru — audit-grade session receipts for autonomous AI coding agents."
 license = { text = "MIT" }
 license-files = ["LICENSE"]
 readme = "README.md"
-authors = [{ name = "Receipt authors", email = "hello@opentruth.ch" }]
+authors = [{ name = "Yoru authors", email = "hello@opentruth.ch" }]
 keywords = ["claude-code", "cursor", "aider", "ai-agents", "observability", "audit"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -20,8 +20,14 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.27"]
 
+[project.urls]
+Homepage = "https://yoru.sh"
+Documentation = "https://yoru.sh/docs"
+Repository = "https://github.com/helios-code/overnight-saas"
+Issues = "https://github.com/helios-code/overnight-saas/issues"
+
 [project.scripts]
-receipt = "receipt_cli.cli:main"
+yoru = "yoru_cli.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
@@ -31,7 +37,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/receipt_cli"]
+packages = ["src/yoru_cli"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

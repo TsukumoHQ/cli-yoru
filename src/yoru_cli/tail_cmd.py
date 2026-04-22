@@ -15,7 +15,7 @@ def run(args: argparse.Namespace) -> int:
     cfg = config.load()
     server = getattr(args, "server", None) or (cfg.get("server") if cfg else None)
     if not server:
-        print("error: no server configured (run `receipt init` or pass --server)", file=sys.stderr)
+        print("error: no server configured (run `yoru init` or pass --server)", file=sys.stderr)
         return 2
     token = cfg.get("token") if cfg else None
 

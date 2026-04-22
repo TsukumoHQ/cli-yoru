@@ -9,10 +9,10 @@ def _args() -> argparse.Namespace:
 
 def test_doctor_exits_1_when_config_missing(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    from receipt_cli import config, doctor_cmd
+    from yoru_cli import config, doctor_cmd
 
     assert config.exists() is False
     rc = doctor_cmd.run(_args())
     assert rc == 1
     err = capsys.readouterr().err
-    assert "receipt init not run" in err
+    assert "yoru init not run" in err

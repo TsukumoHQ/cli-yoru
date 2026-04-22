@@ -8,7 +8,7 @@ from typing import Any
 
 
 def _config_dir() -> Path:
-    return Path.home() / ".config" / "receipt"
+    return Path.home() / ".config" / "yoru"
 
 
 def _config_file() -> Path:
