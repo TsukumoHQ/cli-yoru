@@ -5,7 +5,7 @@ import argparse
 from . import __version__
 from . import config, doctor_cmd, init_cmd, tail_cmd
 
-DEFAULT_SERVER = "http://localhost:8002"
+DEFAULT_SERVER = "https://api.receipt.dev"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -26,8 +26,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Install the Claude Code hook and write ~/.config/receipt/config.json.",
     )
     p_init.add_argument("--server", default=DEFAULT_SERVER, help=f"Backend URL (default: {DEFAULT_SERVER})")
-    p_init.add_argument("--token", default=None, help="Pre-minted hook token (rcpt_...); otherwise prompt via backend.")
-    p_init.add_argument("--user", default=None, help="Email/username to mint a hook token for (skip interactive prompt).")
+    p_init.add_argument(
+        "--token",
+        default=None,
+        help="Pre-minted hook token (rcpt_...) — for headless/CI/server setups. "
+             "Also read from $RECEIPT_TOKEN. Without this, receipt init launches "
+             "interactive device pairing.",
+    )
+    p_init.add_argument(
+        "--label",
+        default=None,
+        help="Human-readable machine label shown in the dashboard "
+             "(default: <hostname> · <os>).",
+    )
+    p_init.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Don't try to auto-open the pairing URL in a browser.",
+    )
     p_init.add_argument("--force", action="store_true", help="Overwrite an existing install.")
 
     p_tail = subparsers.add_parser(

@@ -3,7 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
+import socket
 import sys
+import time
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +16,12 @@ import httpx
 from . import config
 from .api import ReceiptClient
 from .hook_template import HOOK_SCRIPT
+
+
+def _default_label() -> str:
+    """Best-effort human label for this machine — 'macbook-air · darwin'."""
+    host = socket.gethostname().split(".")[0] or "unknown"
+    return f"{host} · {platform.system().lower()}"
 
 
 RECEIPT_MATCHERS: list[tuple[str, str]] = [
@@ -79,6 +89,60 @@ def _merge_settings_json(settings_path: Path, hook_path: Path) -> None:
     os.replace(tmp, settings_path)
 
 
+def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
+    """Run the device-code pairing handshake — returns the raw token or None."""
+    client = ReceiptClient(server)
+    try:
+        start = client.start_device_code(label=label)
+    except httpx.HTTPError as e:
+        print(f"error: failed to contact {server}: {e}", file=sys.stderr)
+        return None
+
+    user_code = start["user_code"]
+    verify_uri = start["verification_uri"]
+    verify_complete = start["verification_uri_complete"]
+    device_code = start["device_code"]
+    expires_in = int(start.get("expires_in", 600))
+    interval = int(start.get("interval", 2))
+
+    print()
+    print(f"  Pair this device with your Receipt account:")
+    print(f"    1. Open  {verify_uri}")
+    print(f"    2. Enter {user_code}")
+    print()
+    if not no_browser:
+        try:
+            webbrowser.open(verify_complete)
+        except Exception:
+            pass
+
+    deadline = time.time() + expires_in
+    while time.time() < deadline:
+        try:
+            resp = client.poll_device_code(device_code)
+        except httpx.HTTPError as e:
+            print(f"\nerror: poll failed: {e}", file=sys.stderr)
+            return None
+        s = resp.get("status")
+        if s == "approved":
+            token = resp.get("token")
+            if not token:
+                print("error: approved but no token returned", file=sys.stderr)
+                return None
+            print(f"  ✓ Paired as {label}")
+            return token
+        if s in ("expired", "denied"):
+            print(f"\nerror: pairing {s} — re-run `receipt init`", file=sys.stderr)
+            return None
+        # pending — sleep and keep polling
+        sys.stdout.write("  waiting for approval…\r")
+        sys.stdout.flush()
+        time.sleep(interval)
+
+    print("\nerror: pairing timed out — re-run `receipt init`", file=sys.stderr)
+    return None
+
+
 def run(args: argparse.Namespace) -> int:
     if config.exists() and not getattr(args, "force", False):
         print("Already installed (use --force to overwrite)", file=sys.stderr)
@@ -86,25 +150,15 @@ def run(args: argparse.Namespace) -> int:
 
     server: str = args.server
     token: str | None = getattr(args, "token", None)
+    # Also accept RECEIPT_TOKEN from env for headless / CI / server deployments.
+    if not token:
+        token = os.environ.get("RECEIPT_TOKEN", "").strip() or None
 
     if not token:
-        user = (getattr(args, "user", None) or "").strip()
-        if not user:
-            if sys.stdin.isatty():
-                user = input("Username for this machine: ").strip()
-            else:
-                user = sys.stdin.readline().strip()
-        if not user:
-            print("error: username is required to mint a hook token", file=sys.stderr)
-            return 2
-        try:
-            resp = ReceiptClient(server).mint_token(user)
-        except httpx.HTTPError as e:
-            print(f"error: failed to mint token from {server}: {e}", file=sys.stderr)
-            return 2
-        token = resp.get("token")
+        label = (getattr(args, "label", None) or "").strip() or _default_label()
+        no_browser = bool(getattr(args, "no_browser", False))
+        token = _pair_device(server, label, no_browser=no_browser)
         if not token:
-            print(f"error: mint response missing 'token' field: {resp!r}", file=sys.stderr)
             return 2
 
     config.save({

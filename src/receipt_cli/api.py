@@ -10,11 +10,22 @@ class ReceiptClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
 
-    def mint_token(self, user: str) -> dict[str, Any]:
+    def start_device_code(self, label: str | None = None) -> dict[str, Any]:
+        """Begin the device-pairing handshake — no auth needed."""
         r = httpx.post(
-            f"{self.base_url}/api/v1/auth/hook-token",
-            json={"user": user},
+            f"{self.base_url}/api/v1/auth/device-code",
+            json={"label": label} if label else {},
             timeout=5.0,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def poll_device_code(self, device_code: str) -> dict[str, Any]:
+        """Poll for approval — returns {status, token?}."""
+        r = httpx.post(
+            f"{self.base_url}/api/v1/auth/device-code/poll",
+            json={"device_code": device_code},
+            timeout=10.0,
         )
         r.raise_for_status()
         return r.json()
