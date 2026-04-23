@@ -1,6 +1,6 @@
 # yoru-cli
 
-Audit trail for autonomous coding agents. `yoru-cli` installs a Claude Code hook that streams every tool call, file edit, and red-flag event to a Yoru backend — Cloud (yoru.sh) or your own self-hosted server.
+The Claude Code hook installer for Yoru. One command installs a `PostToolUse` hook that forwards every tool call, file edit, and red-flag event to a Yoru backend. Your next session shows up in the dashboard automatically.
 
 [![PyPI](https://img.shields.io/pypi/v/yoru-cli.svg)](https://pypi.org/project/yoru-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
@@ -12,39 +12,39 @@ pip install yoru-cli
 yoru init
 ```
 
-`yoru init` pairs your machine with Yoru Cloud (or any server you point it at), writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. Your next Claude Code session streams to Yoru automatically.
+`yoru init` opens a pairing URL in your browser, writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. By default it points at Yoru Cloud ([yoru.sh](https://yoru.sh)) — free forever for one developer.
 
-Python 3.10+. Single runtime dep: `httpx`.
+Requires Python 3.10+. One runtime dep: `httpx`.
 
 ## Usage
 
 ```bash
-yoru init                              # pair against https://api.yoru.sh (default)
-yoru init --server https://yoru.acme   # pair against your self-hosted instance
-yoru init --token YORU_xxx --force     # non-interactive (CI / scripted rotation)
+yoru init                               # pair against https://api.yoru.sh
+yoru init --server https://yoru.acme    # pair against your self-hosted server
+yoru init --token yoru_xxx --force      # non-interactive (CI / scripted rotation)
 
-yoru tail < events.jsonl               # post a batch of events (dev / debug)
+yoru tail < events.jsonl                # post a batch of events (debug)
 
 yoru --version
 yoru --help
 ```
 
-Exit codes: `0` ok · `1` already installed (use `--force`) · `2` auth failed · `3` 4xx · `4` 5xx / network.
+Exit codes: `0` ok · `1` already installed (use `--force`) · `2` auth failed · `3` 4xx · `4` 5xx/network.
 
-## Hook contract
+## How the hook works
 
-The installed hook is a ~20-line Bash script that `POST`s one JSON event per Claude Code `PostToolUse` firing:
+The installed script is ~20 lines of Bash that `POST`s one JSON event per Claude Code tool call:
 
 ```json
 {"session_id": "…", "user": "…", "kind": "tool_use", "tool": "Bash", "content": "…"}
 ```
 
-`curl --max-time 2 || true` — the hook never blocks Claude Code, even if the backend is down.
+It uses `curl --max-time 2 || true` so a Yoru outage never stalls your terminal — Claude Code doesn't notice the hook is even there.
 
-## Self-hosting the server
+## Self-host the server
 
-The CLI is MIT; the Yoru backend + dashboard are AGPL-3.0 and live at **[github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru)**. `docker-compose up`, point `yoru init --server` at it, done.
+The CLI is MIT. The server (backend + dashboard) is AGPL-3.0 and lives at **[github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru)**. `docker-compose up`, then `yoru init --server https://your-host` — done.
 
 ## License
 
-[MIT](./LICENSE). Copyright (c) 2026 Yoru authors.
+[MIT](./LICENSE) · Copyright (c) 2026 Yoru authors. Issues and PRs welcome at [github.com/yoru-sh/cli](https://github.com/yoru-sh/cli).
