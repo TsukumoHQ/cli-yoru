@@ -5,7 +5,7 @@ description = "Yoru — audit-grade session receipts for autonomous AI coding ag
 license = { text = "MIT" }
 license-files = ["LICENSE"]
 readme = "README.md"
-authors = [{ name = "Yoru authors", email = "hello@opentruth.ch" }]
+authors = [{ name = "Yoru authors", email = "hello@yoru.sh" }]
 keywords = ["claude-code", "cursor", "aider", "ai-agents", "observability", "audit"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -23,8 +23,8 @@ dependencies = ["httpx>=0.27"]
 [project.urls]
 Homepage = "https://yoru.sh"
 Documentation = "https://yoru.sh/docs"
-Repository = "https://github.com/helios-code/overnight-saas"
-Issues = "https://github.com/helios-code/overnight-saas/issues"
+Repository = "https://github.com/yoru-sh/cli"
+Issues = "https://github.com/yoru-sh/cli/issues"
 
 [project.scripts]
 yoru = "yoru_cli.cli:main"
