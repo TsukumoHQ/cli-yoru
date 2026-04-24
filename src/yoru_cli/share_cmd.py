@@ -5,11 +5,12 @@ Two flows:
   yoru share <session-id>            # flip public, copy URL
   yoru share --revoke <session-id>   # flip back to private
 
-First-ever invocation on a machine asks for explicit confirmation
-("prompts and file paths will be visible"). We remember that consent in
-`~/.config/yoru/share-confirmed` so subsequent calls are silent. The
-confirmation is scoped to the machine, not the account — same-account
-different-machine re-confirms.
+Consent: the first-ever share on an account prompts for explicit
+acknowledgment ("prompts and file paths will be visible"). The decision
+is persisted server-side (users.share_consent_given_at) so it follows
+the account across machines — a second machine running `yoru share`
+won't re-ask. Previously stored in ~/.config/yoru/share-confirmed; the
+local file is obsolete and is now ignored if it exists.
 
 Clipboard: we try `pbcopy` on Darwin and `xclip -selection clipboard`
 elsewhere; on failure we just print the URL loudly enough to copy from
@@ -23,7 +24,6 @@ import os
 import platform
 import subprocess
 import sys
-from pathlib import Path
 
 import httpx
 
@@ -31,27 +31,8 @@ from . import config
 from .api import ReceiptClient
 
 
-def _confirm_path() -> Path:
-    return Path.home() / ".config" / "yoru" / "share-confirmed"
-
-
-def _has_confirmed() -> bool:
-    return _confirm_path().exists()
-
-
-def _mark_confirmed() -> None:
-    p = _confirm_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        p.write_text("ok\n", encoding="utf-8")
-    except Exception:
-        # Non-fatal — user will see the confirm prompt again next time,
-        # which is annoying but not broken.
-        pass
-
-
-def _prompt_confirm() -> bool:
-    """Interactive one-time confirmation. Non-interactive callers (CI,
+def _prompt_consent() -> bool:
+    """Interactive one-time acknowledgment. Non-interactive callers (CI,
     piped stdin) can set YORU_SHARE_CONSENT=yes to skip."""
     if os.environ.get("YORU_SHARE_CONSENT", "").strip().lower() in ("1", "yes", "true"):
         return True
@@ -71,7 +52,8 @@ def _prompt_confirm() -> bool:
     print("  Always redacted: content of any event flagged secret_* (AWS / Stripe /")
     print("                   JWT / SSH / Anthropic key / Postgres URL / etc.).")
     print()
-    print("  You can revoke at any time with `yoru share --revoke <id>`.")
+    print("  You'll only be asked once per account. Revoke any specific share at any")
+    print("  time with `yoru share --revoke <id>`.")
     print()
     try:
         ans = input("  Share? [y/N]: ").strip().lower()
@@ -132,7 +114,7 @@ def run(args: argparse.Namespace) -> int:
 
     client = ReceiptClient(server, token=token)
 
-    # Revoke path — no consent prompt, no clipboard. Fast and quiet.
+    # Revoke path — no consent check, no clipboard. Fast and quiet.
     if revoke:
         try:
             resp = client.revoke_share(session_id)
@@ -151,13 +133,26 @@ def run(args: argparse.Namespace) -> int:
         print(f"✓ session {session_id} is private again.")
         return 0
 
-    # Share path — one-time consent, then POST, then clipboard.
-    if not _has_confirmed():
-        ok = _prompt_confirm()
+    # Share path — consent is server-side now (one stamp per account).
+    try:
+        consent = client.get_share_consent()
+    except httpx.HTTPError as e:
+        print(f"error: couldn't check share consent: {e}", file=sys.stderr)
+        return 4
+
+    if not consent.get("consented"):
+        ok = _prompt_consent()
         if not ok:
             print("  aborted — session stays private.")
             return 0
-        _mark_confirmed()
+        try:
+            client.post_share_consent()
+        except httpx.HTTPError as e:
+            print(
+                f"error: couldn't save consent (not stamping server-side): {e}",
+                file=sys.stderr,
+            )
+            return 4
 
     try:
         resp = client.share_session(session_id)

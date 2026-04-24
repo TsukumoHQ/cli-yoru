@@ -68,3 +68,27 @@ class ReceiptClient:
         )
         r.raise_for_status()
         return r.json()
+
+    def get_share_consent(self) -> dict[str, Any]:
+        """Returns {consented: bool, at: str|None} for the authenticated user."""
+        if not self.token:
+            raise RuntimeError("get_share_consent requires authentication")
+        r = httpx.get(
+            f"{self.base_url}/api/v1/account/share-consent",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=5.0,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def post_share_consent(self) -> dict[str, Any]:
+        """Stamp share consent for the authenticated user (idempotent)."""
+        if not self.token:
+            raise RuntimeError("post_share_consent requires authentication")
+        r = httpx.post(
+            f"{self.base_url}/api/v1/account/share-consent",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=5.0,
+        )
+        r.raise_for_status()
+        return r.json()
