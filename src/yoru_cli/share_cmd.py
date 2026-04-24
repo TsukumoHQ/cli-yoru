@@ -103,7 +103,10 @@ def _format_tweet(url: str) -> str:
     tweet needs just enough framing that a dev scrolling past knows what
     they're looking at.
     """
-    return f"look what my Claude Code session just did — {url}\\n\\n(yoru.sh — audit-grade trails for AI coding agents)"
+    return (
+        f"look what my Claude Code session just did — {url}\n\n"
+        "(yoru.sh — audit-grade trails for AI coding agents)"
+    )
 
 
 def run(args: argparse.Namespace) -> int:
