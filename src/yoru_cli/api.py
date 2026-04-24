@@ -38,3 +38,33 @@ class ReceiptClient:
             headers=headers,
             timeout=5.0,
         )
+
+    def share_session(self, session_id: str) -> dict[str, Any]:
+        """Flip a session public (#79). Requires bearer token — 401 otherwise.
+
+        Backend is idempotent: re-POST on an already-public session returns
+        the same `public_url`. 404 on cross-user (token's user doesn't own
+        this session) — callers should treat that as "not your session".
+        """
+        if not self.token:
+            raise RuntimeError("share_session requires authentication (run `yoru init`)")
+        r = httpx.post(
+            f"{self.base_url}/api/v1/sessions/{session_id}/share",
+            json={"source": "cli"},
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def revoke_share(self, session_id: str) -> dict[str, Any]:
+        """Flip a session back to private (#79). Idempotent."""
+        if not self.token:
+            raise RuntimeError("revoke_share requires authentication (run `yoru init`)")
+        r = httpx.post(
+            f"{self.base_url}/api/v1/sessions/{session_id}/share/revoke",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        return r.json()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from . import __version__
-from . import config, doctor_cmd, init_cmd, tail_cmd
+from . import config, doctor_cmd, init_cmd, share_cmd, tail_cmd
 
 DEFAULT_SERVER = "https://api.yoru.sh"
 
@@ -19,7 +19,7 @@ def _build_parser() -> argparse.ArgumentParser:
         version=f"yoru {__version__}",
     )
 
-    subparsers = parser.add_subparsers(dest="cmd", required=True, metavar="{init,tail,doctor}")
+    subparsers = parser.add_subparsers(dest="cmd", required=True, metavar="{init,tail,doctor,share}")
 
     p_init = subparsers.add_parser(
         "init",
@@ -62,6 +62,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Diagnose the install: config, backend, token, hook.",
     )
 
+    p_share = subparsers.add_parser(
+        "share",
+        help="Flip a session public and copy its yoru.sh/s/<id> URL to the clipboard.",
+    )
+    p_share.add_argument(
+        "session_id",
+        help="Session id to share (or revoke). Find it in the dashboard URL or the session header.",
+    )
+    p_share.add_argument(
+        "--revoke",
+        action="store_true",
+        help="Flip the session back to private instead of sharing it.",
+    )
+
     return parser
 
 
@@ -79,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         return tail_cmd.run(args)
     if args.cmd == "doctor":
         return doctor_cmd.run(args)
+    if args.cmd == "share":
+        return share_cmd.run(args)
 
     parser.error(f"unknown command: {args.cmd!r}")
     return 2

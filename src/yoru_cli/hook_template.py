@@ -97,6 +97,20 @@ elif hen=="SubagentStop":
     e["content"]="subagent stopped"
 elif hen=="Stop":
     e["kind"]="session_end"
+    # Issue #80 — discreet share CTA after every session_end. Claude Code
+    # surfaces hook stderr in its output panel so the line is visible
+    # without breaking the main terminal flow. The grade/flag filter
+    # ("only A/B or 1+ flag") from the ticket is a v2 — doing it client-
+    # side would require a synchronous GET /sessions/{id} on the hot
+    # session-close path, and `yoru share` is idempotent so silence-
+    # training isn't a regression worth paying latency for. Revisit once
+    # the hook can read score from the session_end response.
+    sid_stop = original.get("session_id") or original.get("sessionId") or ""
+    if isinstance(sid_stop, str) and sid_stop:
+        try:
+            sys.stderr.write(f"\\n[yoru] session ended — make it public: yoru share {sid_stop}\\n")
+        except Exception:
+            pass
 # PostToolUse / PreToolUse: leave kind unset → backend _infer_kind() from tool
 print(json.dumps({"events":[e]}))')
 curl -sS --max-time 2 -X POST "${SERVER}/api/v1/sessions/events" \\
