@@ -103,7 +103,8 @@ elif hen=="Stop":
     # ("only A/B or 1+ flag") from the ticket is a v2 — doing it client-
     # side would require a synchronous GET /sessions/{id} on the hot
     # session-close path, and `yoru share` is idempotent so silence-
-    # training isn't a regression worth paying latency for. Revisit once
+    # training is not a regression worth paying latency for. Revisit once
+    # (avoid apostrophes here — this block is inside a bash $(python3 -c '...'))
     # the hook can read score from the session_end response.
     sid_stop = original.get("session_id") or original.get("sessionId") or ""
     if isinstance(sid_stop, str) and sid_stop:
