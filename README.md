@@ -9,19 +9,18 @@ The Claude Code hook installer for Yoru. One command installs a `PostToolUse` ho
 
 ```bash
 pip install yoru-cli
-yoru init
+yoru init --server https://yoru.acme.com
 ```
 
-`yoru init` opens a pairing URL in your browser, writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. By default it points at Yoru Cloud ([yoru.sh](https://yoru.sh)) — free forever for one developer.
+Yoru is **self-hosted** — point the CLI at your own backend with `--server`. `yoru init` opens a pairing URL in your browser, writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. Don't have a server yet? [Stand one up](https://github.com/yoru-sh/yoru) — `docker-compose up`.
 
 Requires Python 3.10+. One runtime dep: `httpx`.
 
 ## Usage
 
 ```bash
-yoru init                               # pair against https://api.yoru.sh
-yoru init --server https://yoru.acme    # pair against your self-hosted server
-yoru init --token yoru_xxx --force      # non-interactive (CI / scripted rotation)
+yoru init --server https://yoru.acme.com       # pair against your server (--server required)
+yoru init --server https://yoru.acme.com --token yoru_xxx --force   # non-interactive (CI / scripted rotation)
 
 yoru tail < events.jsonl                # post a batch of events (debug)
 
@@ -43,7 +42,7 @@ It uses `curl --max-time 2 || true` so a Yoru outage never stalls your terminal 
 
 ## Self-host the server
 
-The CLI is MIT. The server (backend + dashboard) is AGPL-3.0 and lives at **[github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru)**. `docker-compose up`, then `yoru init --server https://your-host` — done.
+The CLI is MIT. The server (backend + dashboard) is AGPL-3.0 and lives at **[github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru)**. `docker-compose up`, then `yoru init --server https://your-host` — done. There is no hosted Yoru; you run it.
 
 ## License
 
