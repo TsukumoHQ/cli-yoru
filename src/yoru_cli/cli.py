@@ -5,8 +5,6 @@ import argparse
 from . import __version__
 from . import config, doctor_cmd, init_cmd, share_cmd, tail_cmd
 
-DEFAULT_SERVER = "https://api.yoru.sh"
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -25,7 +23,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "init",
         help="Install the Claude Code hook and write ~/.config/yoru/config.json.",
     )
-    p_init.add_argument("--server", default=DEFAULT_SERVER, help=f"Backend URL (default: {DEFAULT_SERVER})")
+    p_init.add_argument(
+        "--server",
+        required=True,
+        help="Backend URL of your Yoru server, e.g. https://yoru.acme.com. "
+             "Yoru is self-hosted — there is no default server.",
+    )
     p_init.add_argument(
         "--token",
         default=None,
@@ -53,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tail.add_argument(
         "--server",
         default=None,
-        help=f"Backend URL (default: value from config, else {DEFAULT_SERVER}).",
+        help="Backend URL (default: the server saved in config by `yoru init`).",
     )
     p_tail.add_argument("--session-id", default=None, help="Session id to stamp on events missing one.")
 
@@ -85,7 +88,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "tail" and args.server is None:
         cfg = config.load() or {}
-        args.server = cfg.get("server", DEFAULT_SERVER)
+        args.server = cfg.get("server")
+        if not args.server:
+            parser.error(
+                "no server configured — run `yoru init --server <url>` first, "
+                "or pass --server explicitly."
+            )
 
     if args.cmd == "init":
         return init_cmd.run(args)
