@@ -64,101 +64,74 @@ def test_init_with_force_overwrites(monkeypatch, tmp_path):
     assert data["token"] == "rcpt_XYZ"
 
 
-def test_init_mints_token_when_not_provided(monkeypatch, tmp_path):
+def _fake_pairing_client(poll_result: dict):
+    """A ReceiptClient stand-in for the device-code pairing flow. start returns a
+    fixed pairing payload; poll returns `poll_result` (interval=0 so no sleep)."""
+    class FakeClient:
+        def __init__(self, server: str) -> None:
+            self.server = server
+
+        def start_device_code(self, label: str | None = None) -> dict:
+            return {
+                "user_code": "ABCD-EFGH",
+                "verification_uri": "http://fake/pair",
+                "verification_uri_complete": "http://fake/pair?code=ABCD-EFGH",
+                "device_code": "dev-123",
+                "expires_in": 600,
+                "interval": 0,
+            }
+
+        def poll_device_code(self, device_code: str) -> dict:
+            return poll_result
+
+    return FakeClient
+
+
+def test_init_device_pairs_when_no_token(monkeypatch, tmp_path):
+    # No --token → init runs the device-code pairing handshake (no direct mint).
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("YORU_TOKEN", raising=False)
     from yoru_cli import init_cmd
 
-    class FakeResp:
-        status_code = 201
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {"token": "rcpt_MINTED", "user_id": "uuidhex", "user": "alice"}
-
-    captured: dict = {}
-
-    def fake_post(url, json=None, headers=None, timeout=None):
-        captured["url"] = url
-        captured["json"] = json
-        return FakeResp()
-
-    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "alice")
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(
+        init_cmd, "ReceiptClient",
+        _fake_pairing_client({"status": "approved", "token": "rcpt_PAIRED"}),
+    )
+    monkeypatch.setattr("webbrowser.open", lambda *a, **k: True)
 
     rc = init_cmd.run(_args(server="http://fake", token=None))
     assert rc == 0
-    assert captured["url"] == "http://fake/api/v1/auth/hook-token"
-    assert captured["json"] == {"user": "alice"}
-
     data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
-    assert data["token"] == "rcpt_MINTED"
+    assert data["token"] == "rcpt_PAIRED"
+    assert data["server"] == "http://fake"
 
 
-def test_init_mints_token_with_user_flag_non_interactive(monkeypatch, tmp_path):
+def test_init_device_pairing_denied_returns_nonzero(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("YORU_TOKEN", raising=False)
     from yoru_cli import init_cmd
 
-    class FakeResp:
-        status_code = 201
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {"token": "rcpt_FROMFLAG", "user_id": "uuidhex", "user": "a@b.c"}
-
-    captured: dict = {}
-
-    def fake_post(url, json=None, headers=None, timeout=None):
-        captured["url"] = url
-        captured["json"] = json
-        return FakeResp()
-
-    def boom(prompt: str = "") -> str:
-        raise AssertionError("input() must not be called when --user is provided")
-
-    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
-    monkeypatch.setattr("builtins.input", boom)
-
-    rc = init_cmd.run(_args(server="http://fake", token=None, user="a@b.c"))
-    assert rc == 0
-    assert captured["json"] == {"user": "a@b.c"}
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
-    assert data["token"] == "rcpt_FROMFLAG"
-
-
-def test_init_mints_token_from_stdin_when_piped(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    import io
-    from yoru_cli import init_cmd
-
-    class FakeResp:
-        status_code = 201
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {"token": "rcpt_FROMSTDIN", "user_id": "uuidhex", "user": "piped@x.y"}
-
-    captured: dict = {}
-
-    def fake_post(url, json=None, headers=None, timeout=None):
-        captured["json"] = json
-        return FakeResp()
-
-    def boom(prompt: str = "") -> str:
-        raise AssertionError("input() must not be called when stdin is piped")
-
-    monkeypatch.setattr("yoru_cli.api.httpx.post", fake_post)
-    monkeypatch.setattr("builtins.input", boom)
-    monkeypatch.setattr("sys.stdin", io.StringIO("piped@x.y\n"))
+    monkeypatch.setattr(
+        init_cmd, "ReceiptClient", _fake_pairing_client({"status": "denied"})
+    )
+    monkeypatch.setattr("webbrowser.open", lambda *a, **k: True)
 
     rc = init_cmd.run(_args(server="http://fake", token=None))
-    assert rc == 0
-    assert captured["json"] == {"user": "piped@x.y"}
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
-    assert data["token"] == "rcpt_FROMSTDIN"
+    assert rc != 0
+    assert not (tmp_path / ".config" / "yoru" / "config.json").exists()
+
+
+def test_init_device_pairing_approved_without_token_fails(monkeypatch, tmp_path):
+    # Approved but no token in the poll response → hard failure, no config written.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("YORU_TOKEN", raising=False)
+    from yoru_cli import init_cmd
+
+    monkeypatch.setattr(
+        init_cmd, "ReceiptClient", _fake_pairing_client({"status": "approved"})
+    )
+    monkeypatch.setattr("webbrowser.open", lambda *a, **k: True)
+
+    rc = init_cmd.run(_args(server="http://fake", token=None))
+    assert rc != 0
+    assert not (tmp_path / ".config" / "yoru" / "config.json").exists()

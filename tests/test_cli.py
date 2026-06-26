@@ -24,9 +24,12 @@ def test_help_lists_both_subcommands() -> None:
 
 
 def test_version_prints_expected_string() -> None:
+    from yoru_cli import __version__
+
     result = _run("--version")
     assert result.returncode == 0
-    assert "yoru 0.1.0" in (result.stdout + result.stderr)
+    # Assert against the actual package version so a bump never rots this test.
+    assert f"yoru {__version__}" in (result.stdout + result.stderr)
 
 
 @pytest.mark.parametrize("sub", ["init", "tail"])
