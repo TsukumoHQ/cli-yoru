@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from . import __version__
-from . import config, doctor_cmd, init_cmd, share_cmd, tail_cmd
+from . import config, doctor_cmd, init_cmd, share_cmd, tail_cmd, update_cmd
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -17,7 +17,9 @@ def _build_parser() -> argparse.ArgumentParser:
         version=f"yoru {__version__}",
     )
 
-    subparsers = parser.add_subparsers(dest="cmd", required=True, metavar="{init,tail,doctor,share}")
+    subparsers = parser.add_subparsers(
+        dest="cmd", required=True, metavar="{init,tail,doctor,share,update}"
+    )
 
     p_init = subparsers.add_parser(
         "init",
@@ -79,6 +81,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Flip the session back to private instead of sharing it.",
     )
 
+    p_update = subparsers.add_parser(
+        "update",
+        help="Self-update the CLI to the latest release (pip), and refresh the hook.",
+    )
+    p_update.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the dev-build and no-downgrade guards (explicit reinstall/downgrade).",
+    )
+    p_update.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether an update is available and exit — install nothing.",
+    )
+
     return parser
 
 
@@ -103,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         return doctor_cmd.run(args)
     if args.cmd == "share":
         return share_cmd.run(args)
+    if args.cmd == "update":
+        return update_cmd.run(args)
 
     parser.error(f"unknown command: {args.cmd!r}")
     return 2

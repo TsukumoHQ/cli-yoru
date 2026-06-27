@@ -143,6 +143,22 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
     return None
 
 
+def refresh_hook_assets() -> tuple[Path, Path]:
+    """(Re)write the Claude Code hook script and (re)register it in
+    settings.json. Idempotent — used by `init` (first install) and `update`
+    (refresh the hook to the new version + repair the settings wiring). Returns
+    (hook_path, settings_path). Does NOT touch config (server/token)."""
+    hook_dir = Path.home() / ".claude" / "hooks"
+    hook_path = hook_dir / "yoru.sh"
+    os.makedirs(hook_dir, exist_ok=True)
+    hook_path.write_text(HOOK_SCRIPT, encoding="utf-8")
+    os.chmod(hook_path, 0o755)
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    _merge_settings_json(settings_path, hook_path)
+    return hook_path, settings_path
+
+
 def run(args: argparse.Namespace) -> int:
     if config.exists() and not getattr(args, "force", False):
         print("Already installed (use --force to overwrite)", file=sys.stderr)
@@ -167,14 +183,7 @@ def run(args: argparse.Namespace) -> int:
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
-    hook_dir = Path.home() / ".claude" / "hooks"
-    hook_path = hook_dir / "yoru.sh"
-    os.makedirs(hook_dir, exist_ok=True)
-    hook_path.write_text(HOOK_SCRIPT, encoding="utf-8")
-    os.chmod(hook_path, 0o755)
-
-    settings_path = Path.home() / ".claude" / "settings.json"
-    _merge_settings_json(settings_path, hook_path)
+    refresh_hook_assets()
 
     print("\u2713 config   \u2192 ~/.config/yoru/config.json")
     print("\u2713 hook     \u2192 ~/.claude/hooks/yoru.sh")
