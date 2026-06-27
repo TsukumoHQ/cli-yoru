@@ -23,8 +23,8 @@ dependencies = ["httpx>=0.27"]
 [project.urls]
 Homepage = "https://yoru.sh"
 Documentation = "https://yoru.sh/docs"
-Repository = "https://github.com/yoru-sh/cli"
-Issues = "https://github.com/yoru-sh/cli/issues"
+Repository = "https://github.com/TsukumoHQ/cli-yoru"
+Issues = "https://github.com/TsukumoHQ/cli-yoru/issues"
 
 [project.scripts]
 yoru = "yoru_cli.cli:main"

@@ -12,7 +12,7 @@ pip install yoru-cli
 yoru init --server https://yoru.acme.com
 ```
 
-Yoru is **self-hosted** — point the CLI at your own backend with `--server`. `yoru init` opens a pairing URL in your browser, writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. Don't have a server yet? [Stand one up](https://github.com/yoru-sh/yoru) — `docker-compose up`.
+Yoru is **self-hosted** — point the CLI at your own backend with `--server`. `yoru init` opens a pairing URL in your browser, writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. Don't have a server yet? [Stand one up](https://github.com/TsukumoHQ/yoru) — `docker-compose up`.
 
 Requires Python 3.10+. One runtime dep: `httpx`.
 
@@ -42,8 +42,8 @@ It uses `curl --max-time 2 || true` so a Yoru outage never stalls your terminal 
 
 ## Self-host the server
 
-The CLI is MIT. The server (backend + dashboard) is AGPL-3.0 and lives at **[github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru)**. `docker-compose up`, then `yoru init --server https://your-host` — done. There is no hosted Yoru; you run it.
+The CLI is MIT. The server (backend + dashboard) is AGPL-3.0 and lives at **[github.com/TsukumoHQ/yoru](https://github.com/TsukumoHQ/yoru)**. `docker-compose up`, then `yoru init --server https://your-host` — done. There is no hosted Yoru; you run it.
 
 ## License
 
-[MIT](./LICENSE) · Copyright (c) 2026 Yoru authors. Issues and PRs welcome at [github.com/yoru-sh/cli](https://github.com/yoru-sh/cli).
+[MIT](./LICENSE) · Copyright (c) 2026 Yoru authors. Issues and PRs welcome at [github.com/TsukumoHQ/cli-yoru](https://github.com/TsukumoHQ/cli-yoru).
