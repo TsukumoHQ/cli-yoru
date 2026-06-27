@@ -81,39 +81,23 @@ if git_branch: e["git_branch"] = git_branch
 hen=e.get("hook_event_name")
 if hen=="SessionStart":
     e["kind"]="session_start"
-elif hen=="UserPromptSubmit":
-    e["kind"]="message"
-    e["tool"]="user"
-    p=e.get("prompt")
-    if isinstance(p,str) and p: e["content"]=p[:2000]
-elif hen=="Notification":
-    e["kind"]="message"
-    e["tool"]="notification"
-    m=e.get("message")
-    if isinstance(m,str) and m: e["content"]=m[:2000]
-elif hen=="SubagentStop":
-    e["kind"]="message"
-    e["tool"]="subagent"
-    e["content"]="subagent stopped"
 elif hen=="Stop":
     e["kind"]="session_end"
-    # Issue #80 — discreet share CTA after every session_end. Claude Code
-    # surfaces hook stderr in its output panel so the line is visible
-    # without breaking the main terminal flow. The grade/flag filter
-    # ("only A/B or 1+ flag") from the ticket is a v2 — doing it client-
-    # side would require a synchronous GET /sessions/{id} on the hot
-    # session-close path, and `yoru share` is idempotent so silence-
-    # training is not a regression worth paying latency for. Revisit once
-    # (avoid apostrophes here — this block is inside a bash $(python3 -c '...'))
-    # the hook can read score from the session_end response.
+    # Discreet share CTA after session_end (surfaced via hook stderr).
+    # (avoid apostrophes here - this block is inside a bash $(python3 -c '...'))
     sid_stop = original.get("session_id") or original.get("sessionId") or ""
     if isinstance(sid_stop, str) and sid_stop:
         try:
-            sys.stderr.write(f"\\n[yoru] session ended — make it public: yoru share {sid_stop}\\n")
+            sys.stderr.write(f"\\n[yoru] session ended - make it public: yoru share {sid_stop}\\n")
         except Exception:
             pass
-# PostToolUse / PreToolUse: leave kind unset → backend _infer_kind() from tool
+else:
+    # Tool calls, prompts, notifications now come from the durable transcript
+    # tailer (yoru_cli.transcript_tailer): single source, no duplicates, and
+    # they survive backend downtime. The hook only ships session lifecycle.
+    sys.exit(0)
 print(json.dumps({"events":[e]}))')
+[ -z "${BODY}" ] && exit 0
 curl -sS --max-time 2 -X POST "${SERVER}/api/v1/sessions/events" \\
   -H "Authorization: Bearer ${TOKEN}" \\
   -H "Content-Type: application/json" \\

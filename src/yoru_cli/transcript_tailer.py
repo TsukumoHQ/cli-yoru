@@ -69,17 +69,18 @@ def _save_state(state: dict[str, int]) -> None:
     tmp.replace(_STATE_PATH)
 
 
-def _post(server: str, token: str, event: dict[str, Any]) -> None:
-    """One-event ingest. Silent on non-2xx; we never block on Yoru outages."""
-    _post_batch(server, token, [event])
+def _post(server: str, token: str, event: dict[str, Any]) -> bool:
+    """One-event ingest. Returns True on success — the caller only advances the
+    read offset past acked events, so nothing is lost on a backend outage."""
+    return _post_batch(server, token, [event])
 
 
-def _post_batch(server: str, token: str, events: list[dict[str, Any]]) -> None:
-    """Batch ingest — POST up to 1000 events in one request. Respects the
-    Retry-After header returned by the backend's token-bucket rate limiter
-    (slowapi-style), so a long backfill throttles instead of losing events."""
+def _post_batch(server: str, token: str, events: list[dict[str, Any]]) -> bool:
+    """Batch ingest — POST up to 1000 events in one request. Returns True on a
+    2xx. Retries on rate-limit (429) AND on connection errors (backend down /
+    restarting) with backoff, so a transient outage doesn't drop events."""
     if not events:
-        return
+        return True
     body = json.dumps({"events": events}).encode("utf-8")
     for attempt in range(6):
         req = urllib.request.Request(
@@ -93,7 +94,7 @@ def _post_batch(server: str, token: str, events: list[dict[str, Any]]) -> None:
         )
         try:
             urllib.request.urlopen(req, timeout=30).read()
-            return
+            return True
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 retry_after = 1
@@ -103,12 +104,18 @@ def _post_batch(server: str, token: str, events: list[dict[str, Any]]) -> None:
                     pass
                 time.sleep(retry_after + 0.2)
                 continue
+            # 4xx/5xx that isn't rate-limit: don't spin, but report failure so
+            # the offset doesn't advance past this event.
             print(f"[tailer] POST {e.code}: {e.reason}", file=sys.stderr)
-            return
+            return False
         except (urllib.error.URLError, TimeoutError) as e:
-            print(f"[tailer] POST failed: {e}", file=sys.stderr)
-            return
-    print(f"[tailer] gave up after 6 retries (rate-limited)", file=sys.stderr)
+            # Backend down / restarting — back off and retry (covers a daemon
+            # restart window). Failing here keeps the read offset put.
+            print(f"[tailer] POST retry {attempt + 1}/6: {e}", file=sys.stderr)
+            time.sleep(min(2 ** attempt, 10))
+            continue
+    print("[tailer] gave up after 6 retries — will retry next poll", file=sys.stderr)
+    return False
 
 
 # In-memory set of Anthropic message IDs we've already ingested. Prevents
@@ -178,6 +185,7 @@ def _iter_assistant_events(line: str) -> Iterable[dict[str, Any]]:
             "tool": "user",
             "content": text[:2000],
             "raw": {"hook_event_name": "TranscriptTail", "uuid": key},
+            "entry_uuid": str(key) if key else None,
         }
         return
 
@@ -191,17 +199,43 @@ def _iter_assistant_events(line: str) -> Iterable[dict[str, Any]]:
     ts = d.get("timestamp") or ""
     if not session_id:
         return
-    # Dedup by Anthropic message.id. First-seen wins; later dupes silently
-    # dropped. Avoids counting the same assistant turn 2+ times.
+    line_uuid = d.get("uuid") or message.get("id") or ""
+    # Claude Code writes each assistant message MULTIPLE times (streaming
+    # deltas + a final consolidation), and tool_use blocks often only appear in
+    # the later writes. So we must NOT skip the whole message on a repeat
+    # message.id — that drops tool calls. Instead:
+    #   * tool_use → emitted on every write, deduped at the backend by the
+    #     block's stable id (toolu_…), so each tool call lands exactly once;
+    #   * text/thinking/token → emitted only on the first write (is_repeat),
+    #     so cost/text aren't double-counted.
     msg_id = message.get("id")
+    is_repeat = bool(msg_id) and msg_id in _SEEN_MSG_IDS
     if isinstance(msg_id, str) and msg_id:
-        if msg_id in _SEEN_MSG_IDS:
-            return
         _SEEN_MSG_IDS.add(msg_id)
-    for block in content:
+    _FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+    for idx, block in enumerate(content):
         if not isinstance(block, dict):
             continue
         block_type = block.get("type")
+        euid = f"{line_uuid}:{idx}" if line_uuid else None
+        if block_type == "tool_use":
+            tname = block.get("name")
+            tinput = block.get("input")
+            yield {
+                "session_id": session_id,
+                "ts": ts,
+                "kind": "file_change" if tname in _FILE_TOOLS else "tool_use",
+                "tool": tname,
+                "raw": {
+                    "hook_event_name": "TranscriptTail",
+                    "tool_input": tinput if isinstance(tinput, dict) else {},
+                },
+                # Stable across streaming re-writes → backend dedups to one row.
+                "entry_uuid": block.get("id") or euid,
+            }
+            continue
+        if is_repeat:
+            continue  # text/thinking/token already captured on the first write
         if block_type == "text":
             text = block.get("text")
             if isinstance(text, str) and text.strip():
@@ -212,6 +246,7 @@ def _iter_assistant_events(line: str) -> Iterable[dict[str, Any]]:
                     "tool": "assistant",
                     "content": text[:4000],
                     "raw": {"hook_event_name": "TranscriptTail", "block": block},
+                    "entry_uuid": euid,
                 }
         elif block_type == "thinking":
             think = block.get("thinking")
@@ -223,14 +258,16 @@ def _iter_assistant_events(line: str) -> Iterable[dict[str, Any]]:
                     "tool": "thinking",
                     "content": think[:4000],
                     "raw": {"hook_event_name": "TranscriptTail", "block": block},
+                    "entry_uuid": euid,
                 }
 
-    # One usage event per message — the backend's events_router aggregates
+    # One usage event per message (first write only — see is_repeat above).
+    # The backend's events_router aggregates
     # tokens_input/output/cost_usd onto the session row, so this is where the
     # Hero "cost" sparkline gets its numbers. Attaching model to `raw` keeps
     # the assumption auditable.
     usage = message.get("usage") or {}
-    if isinstance(usage, dict) and usage:
+    if not is_repeat and isinstance(usage, dict) and usage:
         model = str(message.get("model") or "")
         input_tokens = (
             int(usage.get("input_tokens") or 0)
@@ -259,6 +296,7 @@ def _iter_assistant_events(line: str) -> Iterable[dict[str, Any]]:
                     "usage": usage,
                     "tool_input": {"model": model, **usage},
                 },
+                "entry_uuid": f"{line_uuid}:usage" if line_uuid else None,
             }
 
 
@@ -278,20 +316,29 @@ def _drain_file(
         return offset
     if not remainder:
         return offset
-    # If we caught a partial line at EOF, rewind to the last newline.
-    last_nl = remainder.rfind(b"\n")
-    if last_nl == -1:
-        return offset  # no complete line yet
-    consumed, pending = remainder[: last_nl + 1], remainder[last_nl + 1 :]
-    new_offset = offset + len(consumed)
-    text = consumed.decode("utf-8", errors="replace")
-    for line in text.splitlines():
-        if not line:
-            continue
-        for ev in _iter_assistant_events(line):
-            _post(server, token, ev)
-    _ = pending  # drop — next drain re-reads from new_offset
-    return new_offset
+    # Advance the offset one complete line at a time, and ONLY past lines whose
+    # events all POST successfully. On a failure (backend down) we stop and
+    # return the offset at the start of the failed line, so the next poll
+    # re-reads from there once the backend recovers — no event is ever lost.
+    pos = offset
+    buf = remainder
+    while True:
+        nl = buf.find(b"\n")
+        if nl == -1:
+            break  # no complete line yet — wait for more
+        line_bytes = buf[: nl + 1]
+        line = line_bytes.decode("utf-8", errors="replace").strip()
+        if line:
+            ok = True
+            for ev in _iter_assistant_events(line):
+                if not _post(server, token, ev):
+                    ok = False
+                    break
+            if not ok:
+                return pos  # leave offset before the un-acked line
+        pos += len(line_bytes)
+        buf = buf[nl + 1 :]
+    return pos
 
 
 def run() -> None:
