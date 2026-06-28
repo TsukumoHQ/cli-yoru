@@ -1,6 +1,6 @@
 [project]
 name = "yoru-cli"
-version = "0.1.2"
+version = "0.1.3"
 description = "Yoru — audit-grade session receipts for autonomous AI coding agents."
 license = { text = "MIT" }
 license-files = ["LICENSE"]
