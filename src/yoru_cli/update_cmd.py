@@ -18,13 +18,15 @@ import sys
 
 import httpx
 
-from . import __version__, init_cmd
+from . import __version__, config, init_cmd
 
-# Pinned constant — NEVER a value that can redirect to a renamed/dead org. A
+# Pinned constants — NEVER a value that can redirect to a renamed/dead org. A
 # stale org ref is how a sibling tool once shipped a broken updater (brand-leak
-# lesson). The CLI lives in its own public repo.
-_REPO = "TsukumoHQ/cli-yoru"
+# lesson). The CLI and the server live in their own public repos.
+_REPO = "TsukumoHQ/cli-yoru"  # the MIT CLI (this package)
 _RELEASES_LATEST = f"https://api.github.com/repos/{_REPO}/releases/latest"
+_SERVER_REPO = "TsukumoHQ/yoru"  # the AGPL server (docker image / compose stack)
+_SERVER_RELEASES_LATEST = f"https://api.github.com/repos/{_SERVER_REPO}/releases/latest"
 _PKG = "yoru-cli"
 
 Version = tuple[int, int, int]
@@ -50,9 +52,9 @@ def _is_dev_build(v: str) -> bool:
     return "dev" in v or "+" in v or v.startswith("0.0.0")
 
 
-def _fetch_latest_tag(*, timeout: float = 5.0) -> str | None:
+def _fetch_latest_tag(url: str = _RELEASES_LATEST, *, timeout: float = 5.0) -> str | None:
     resp = httpx.get(
-        _RELEASES_LATEST,
+        url,
         timeout=timeout,
         follow_redirects=True,
         headers={"Accept": "application/vnd.github+json"},
@@ -72,6 +74,10 @@ def _pip_install(version: str) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    # --server[=URL] → check the running SERVER's version (notify-only), not the CLI.
+    if getattr(args, "server", None) is not None:
+        return _check_server(args.server)
+
     current = __version__
     force = bool(getattr(args, "force", False))
     check_only = bool(getattr(args, "check", False))
@@ -139,5 +145,106 @@ def run(args: argparse.Namespace) -> int:
     except Exception as e:  # noqa: BLE001 — side-asset failure must not fail update
         print(f"note: could not refresh the hook assets ({e}); run `yoru init --force`.")
 
-    print(f"✓ updated to {latest_tag}. Run `yoru --version` to confirm.")
+    print(f"✓ updated to {latest_tag}.")
+
+    # --- verify (contract step 10) — confirm the installed version is the target.
+    # Additive (the success line above always prints). Runs in a FRESH interpreter
+    # so it reports the freshly-installed package on disk, not the stale __version__
+    # already imported into THIS process. Best-effort: a verify hiccup never turns a
+    # pip install that returned 0 into a failure.
+    installed = _installed_version()
+    if installed is None:
+        print("  run `yoru --version` to confirm.")
+    elif _parse_semver(installed) == latest_ver:
+        print(f"  verified: {installed}.")
+    else:
+        print(
+            f"⚠ but `yoru --version` reports {installed}, not {latest_tag} — a shell "
+            "rehash or a pipx/uv-managed install may be shadowing it.",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _installed_version() -> str | None:
+    """The version a FRESH interpreter sees for the package — i.e. what's on disk
+    after the pip install, not the value imported into the current process.
+    Returns None if it can't be read (verify is best-effort)."""
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", "import importlib.metadata as m; print(m.version('yoru-cli'))"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out_str = out.stdout.strip()
+    return out_str or None
+
+
+def _check_server(server_arg: str) -> int:
+    """Notify-only server version check. Compares the running server's reported
+    version (GET /api/v1/config) against the latest TsukumoHQ/yoru release and, if
+    behind, prints the self-host upgrade steps. NEVER pulls an image or touches the
+    self-hoster's container — the server is self-hosted; the operator upgrades on
+    their own cadence. Any error is a clean no-op (fail-safe)."""
+    server = (server_arg or (config.load() or {}).get("server") or "").rstrip("/")
+    if not server:
+        print(
+            "no server configured — run `yoru init --server <url>` first, "
+            "or pass `yoru update --server <url>`.",
+            file=sys.stderr,
+        )
+        return 0
+
+    # running server version (fail-safe)
+    try:
+        resp = httpx.get(f"{server}/api/v1/config", timeout=5.0, follow_redirects=True)
+        resp.raise_for_status()
+        server_ver = (resp.json() or {}).get("version")
+    except httpx.HTTPError as e:
+        print(f"could not reach the server at {server} ({e}); nothing changed.")
+        return 0
+    if not server_ver:
+        print(
+            f"the server at {server} did not report a version (likely older than "
+            "0.2.0) — upgrade it once to enable this check."
+        )
+        return 0
+
+    # latest server release (fail-safe)
+    try:
+        latest_tag = _fetch_latest_tag(_SERVER_RELEASES_LATEST)
+    except httpx.HTTPError as e:
+        print(f"could not reach GitHub releases ({e}); server stays on {server_ver}.")
+        return 0
+    if not latest_tag:
+        print(f"no published release for {_SERVER_REPO}; server stays on {server_ver}.")
+        return 0
+
+    server_v, latest_v = _parse_semver(server_ver), _parse_semver(latest_tag)
+    if server_v is None or latest_v is None:
+        print(f"server {server_ver} vs latest {latest_tag} — could not compare versions.")
+        return 0
+    if latest_v <= server_v:
+        print(f"server is up to date ({server_ver}).")
+        return 0
+
+    # behind → notify-only upgrade note. Yoru ships NO public registry image; the
+    # self-host stack builds from source via docker-compose, so the honest upgrade
+    # path is a source rebuild — not a `docker pull`.
+    print(
+        f"server update available: {server_ver} → {latest_tag}\n"
+        "\n"
+        "Yoru is self-hosted — upgrade on your own cadence by rebuilding from source\n"
+        "(no image is pulled and your running container is never touched remotely):\n"
+        "\n"
+        "  git pull\n"
+        "  docker compose -f docker-compose.prod.yml up -d --build\n"
+        "\n"
+        f"Schema migrations apply automatically on boot. Skim the {_SERVER_REPO} release\n"
+        "notes first — breaking changes are tagged 🚨."
+    )
     return 0

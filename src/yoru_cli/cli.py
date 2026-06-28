@@ -95,6 +95,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Report whether an update is available and exit — install nothing.",
     )
+    p_update.add_argument(
+        "--server",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="URL",
+        help="Check the running SERVER's version (notify-only) instead of self-updating "
+        "the CLI. Bare --server uses your configured server; --server URL targets that "
+        "instance. Never pulls or restarts the server.",
+    )
 
     return parser
 
