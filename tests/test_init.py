@@ -42,6 +42,30 @@ def test_init_writes_config_and_hook(monkeypatch, tmp_path):
     assert "rcpt_ABC" in cfg_path.read_text()
 
 
+def test_init_lands_public_skill(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    assert rc == 0
+
+    skill = tmp_path / ".claude" / "skills" / "yoru" / "SKILL.md"
+    assert skill.is_file()
+    body = skill.read_text()
+    # Valid Claude Code skill frontmatter + the public name it resolves by.
+    assert body.startswith("---\n")
+    assert "name: yoru" in body
+    assert "description:" in body
+    # Honesty rails baked in (self-hosted only; --server has no default).
+    assert "self-hosted" in body.lower()
+    assert "--server" in body
+    # Public/AGPL split — the shipped skill must not leak private fleet paths
+    # or the private maintainer persona.
+    assert ".worktrees" not in body
+    assert "yoru-dev" not in body
+    assert "agent-relay" not in body
+
+
 def test_init_already_installed_without_force(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     from yoru_cli import init_cmd

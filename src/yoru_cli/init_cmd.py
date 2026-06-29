@@ -16,6 +16,7 @@ import httpx
 from . import config
 from .api import ReceiptClient
 from .hook_template import HOOK_SCRIPT
+from .skill_template import SKILL_MD, SKILL_NAME
 
 
 def _default_label() -> str:
@@ -106,7 +107,7 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
     interval = int(start.get("interval", 2))
 
     print()
-    print(f"  Pair this device with your Yoru account:")
+    print("  Pair this device with your Yoru account:")
     print(f"    1. Open  {verify_uri}")
     print(f"    2. Enter {user_code}")
     print()
@@ -143,11 +144,22 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
     return None
 
 
-def refresh_hook_assets() -> tuple[Path, Path]:
-    """(Re)write the Claude Code hook script and (re)register it in
-    settings.json. Idempotent — used by `init` (first install) and `update`
-    (refresh the hook to the new version + repair the settings wiring). Returns
-    (hook_path, settings_path). Does NOT touch config (server/token)."""
+def _install_skill() -> Path:
+    """(Re)write the PUBLIC end-user yoru Claude Code skill so a fresh Claude
+    session can drive setup + usage. Lands at ~/.claude/skills/yoru/SKILL.md,
+    where Claude Code resolves user-level skills. Idempotent."""
+    skill_dir = Path.home() / ".claude" / "skills" / SKILL_NAME
+    os.makedirs(skill_dir, exist_ok=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text(SKILL_MD, encoding="utf-8")
+    return skill_path
+
+
+def refresh_hook_assets() -> tuple[Path, Path, Path]:
+    """(Re)write the Claude Code hook script + the public yoru skill, and
+    (re)register the hook in settings.json. Idempotent — used by `init` (first
+    install) and `update` (refresh to the new version + repair the wiring).
+    Returns (hook_path, settings_path, skill_path). Does NOT touch config."""
     hook_dir = Path.home() / ".claude" / "hooks"
     hook_path = hook_dir / "yoru.sh"
     os.makedirs(hook_dir, exist_ok=True)
@@ -156,7 +168,9 @@ def refresh_hook_assets() -> tuple[Path, Path]:
 
     settings_path = Path.home() / ".claude" / "settings.json"
     _merge_settings_json(settings_path, hook_path)
-    return hook_path, settings_path
+
+    skill_path = _install_skill()
+    return hook_path, settings_path, skill_path
 
 
 def run(args: argparse.Namespace) -> int:
@@ -188,5 +202,6 @@ def run(args: argparse.Namespace) -> int:
     print("\u2713 config   \u2192 ~/.config/yoru/config.json")
     print("\u2713 hook     \u2192 ~/.claude/hooks/yoru.sh")
     print("\u2713 settings \u2192 ~/.claude/settings.json (hook registered)")
+    print("\u2713 skill    \u2192 ~/.claude/skills/yoru/SKILL.md (Claude can drive setup + usage)")
     print("Next: run Claude Code normally; first event streams to /sessions/events.")
     return 0

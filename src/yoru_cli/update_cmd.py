@@ -141,7 +141,7 @@ def run(args: argparse.Namespace) -> int:
     # --- refresh side-assets (best-effort; never fails the binary update) ----
     try:
         init_cmd.refresh_hook_assets()
-        print("✓ hook + settings refreshed")
+        print("✓ hook + settings + skill refreshed")
     except Exception as e:  # noqa: BLE001 — side-asset failure must not fail update
         print(f"note: could not refresh the hook assets ({e}); run `yoru init --force`.")
 

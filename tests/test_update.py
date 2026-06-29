@@ -24,7 +24,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(update_cmd, "_pip_install", lambda v: rec["pip"].append(v) or 0)
     monkeypatch.setattr(
         init_cmd, "refresh_hook_assets",
-        lambda: rec.__setitem__("refresh", rec["refresh"] + 1) or (None, None),
+        lambda: rec.__setitem__("refresh", rec["refresh"] + 1) or (None, None, None),
     )
     monkeypatch.setattr(update_cmd, "_fetch_latest_tag", lambda **_: "v0.1.3")
     return rec
