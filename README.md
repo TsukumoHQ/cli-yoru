@@ -8,9 +8,13 @@ The Claude Code hook installer for Yoru. One command installs a `PostToolUse` ho
 ## Install
 
 ```bash
-pip install yoru-cli
+pipx install yoru-cli                       # or: uv tool install yoru-cli
 yoru init --server https://yoru.acme.com
 ```
+
+Use `pipx`/`uv` — a bare `pip install yoru-cli` fails on Homebrew/Debian Python with
+`error: externally-managed-environment` (PEP 668). No pipx? A venv works too:
+`python3 -m venv .venv && .venv/bin/pip install yoru-cli`.
 
 Yoru is **self-hosted** — point the CLI at your own backend with `--server`. `yoru init` opens a pairing URL in your browser, writes `~/.claude/hooks/yoru.sh`, and registers the hook in `~/.claude/settings.json`. Don't have a server yet? [Stand one up](https://github.com/TsukumoHQ/yoru) — `docker-compose up`.
 
