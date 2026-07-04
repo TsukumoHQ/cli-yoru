@@ -15,6 +15,7 @@ import httpx
 
 from . import config
 from .api import ReceiptClient
+from .agent_templates import CODEX_HOOK_SCRIPT, OPENCODE_PLUGIN_TS
 from .hook_template import HOOK_SCRIPT
 from .skill_template import SKILL_MD, SKILL_NAME
 
@@ -29,6 +30,20 @@ RECEIPT_MATCHERS: list[tuple[str, str]] = [
     ("PostToolUse", "*"),
     ("SessionStart", "*"),
     ("Stop", "*"),
+]
+
+CODEX_MATCHERS: list[tuple[str, str | None]] = [
+    ("SessionStart", None),
+    ("UserPromptSubmit", None),
+    ("Stop", None),
+    ("PostToolUse", "Bash"),
+    ("PostToolUse", "apply_patch"),
+    ("PostToolUse", "Edit"),
+    ("PostToolUse", "Write"),
+    ("PreToolUse", "Bash"),
+    ("PreToolUse", "apply_patch"),
+    ("PreToolUse", "Edit"),
+    ("PreToolUse", "Write"),
 ]
 
 
@@ -88,6 +103,82 @@ def _merge_settings_json(settings_path: Path, hook_path: Path) -> None:
     tmp = settings_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
     os.replace(tmp, settings_path)
+
+
+def _read_json_object(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _write_json_object(path: Path, obj: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _merge_codex_hooks_json(hooks_path: Path, hook_path: Path) -> None:
+    """Register the Codex hook in ~/.codex/hooks.json, preserving user hooks."""
+    obj = _read_json_object(hooks_path)
+    hooks = obj.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        obj["hooks"] = hooks
+
+    command = f"{sys.executable} {hook_path}"
+
+    def _is_yoru_entry(entry: object) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        inner = entry.get("hooks")
+        if not isinstance(inner, list) or not inner:
+            return False
+        first = inner[0]
+        if not isinstance(first, dict):
+            return False
+        cmd = first.get("command")
+        return isinstance(cmd, str) and cmd.endswith("yoru.py")
+
+    for event_name, matcher in CODEX_MATCHERS:
+        entries = hooks.setdefault(event_name, [])
+        if not isinstance(entries, list):
+            entries = []
+            hooks[event_name] = entries
+
+        entry: dict[str, object] = {
+            "hooks": [{"type": "command", "command": command}],
+        }
+        if matcher is not None:
+            entry["matcher"] = matcher
+
+        replaced = False
+        for idx, existing in enumerate(entries):
+            if not _is_yoru_entry(existing):
+                continue
+            if matcher is None or existing.get("matcher") == matcher:
+                entries[idx] = entry
+                replaced = True
+                break
+        if not replaced:
+            entries.append(entry)
+
+    _write_json_object(hooks_path, obj)
+
+
+def _merge_opencode_package_json(package_path: Path) -> None:
+    """Ensure OpenCode can resolve @opencode-ai/plugin for the local plugin."""
+    obj = _read_json_object(package_path)
+    deps = obj.setdefault("dependencies", {})
+    if not isinstance(deps, dict):
+        deps = {}
+        obj["dependencies"] = deps
+    deps.setdefault("@opencode-ai/plugin", "latest")
+    _write_json_object(package_path, obj)
 
 
 def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
@@ -155,11 +246,38 @@ def _install_skill() -> Path:
     return skill_path
 
 
+def _install_codex_hook() -> tuple[Path, Path]:
+    hook_dir = Path.home() / ".codex" / "hooks"
+    hook_path = hook_dir / "yoru.py"
+    os.makedirs(hook_dir, exist_ok=True)
+    hook_path.write_text(CODEX_HOOK_SCRIPT, encoding="utf-8")
+    os.chmod(hook_path, 0o755)
+
+    hooks_path = Path.home() / ".codex" / "hooks.json"
+    _merge_codex_hooks_json(hooks_path, hook_path)
+    return hook_path, hooks_path
+
+
+def _install_opencode_plugin(project_root: Path | None = None) -> tuple[Path, Path]:
+    root = project_root or Path.cwd()
+    opencode_dir = root / ".opencode"
+    plugin_dir = opencode_dir / "plugins"
+    plugin_path = plugin_dir / "yoru.ts"
+    os.makedirs(plugin_dir, exist_ok=True)
+    plugin_path.write_text(OPENCODE_PLUGIN_TS, encoding="utf-8")
+
+    package_path = opencode_dir / "package.json"
+    _merge_opencode_package_json(package_path)
+    return plugin_path, package_path
+
+
 def refresh_hook_assets() -> tuple[Path, Path, Path]:
     """(Re)write the Claude Code hook script + the public yoru skill, and
     (re)register the hook in settings.json. Idempotent — used by `init` (first
     install) and `update` (refresh to the new version + repair the wiring).
-    Returns (hook_path, settings_path, skill_path). Does NOT touch config."""
+    Also installs Codex and OpenCode assets. Returns the historical
+    (hook_path, settings_path, skill_path) tuple for update compatibility.
+    Does NOT touch config."""
     hook_dir = Path.home() / ".claude" / "hooks"
     hook_path = hook_dir / "yoru.sh"
     os.makedirs(hook_dir, exist_ok=True)
@@ -170,6 +288,8 @@ def refresh_hook_assets() -> tuple[Path, Path, Path]:
     _merge_settings_json(settings_path, hook_path)
 
     skill_path = _install_skill()
+    _install_codex_hook()
+    _install_opencode_plugin()
     return hook_path, settings_path, skill_path
 
 
@@ -203,5 +323,7 @@ def run(args: argparse.Namespace) -> int:
     print("\u2713 hook     \u2192 ~/.claude/hooks/yoru.sh")
     print("\u2713 settings \u2192 ~/.claude/settings.json (hook registered)")
     print("\u2713 skill    \u2192 ~/.claude/skills/yoru/SKILL.md (Claude can drive setup + usage)")
-    print("Next: run Claude Code normally; first event streams to /sessions/events.")
+    print("\u2713 codex    \u2192 ~/.codex/hooks/yoru.py + ~/.codex/hooks.json")
+    print("\u2713 opencode \u2192 .opencode/plugins/yoru.ts + .opencode/package.json")
+    print("Next: run Claude Code, Codex, or OpenCode normally; events stream to /sessions/events.")
     return 0

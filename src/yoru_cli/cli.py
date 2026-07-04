@@ -23,7 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_init = subparsers.add_parser(
         "init",
-        help="Install the Claude Code hook and write ~/.config/yoru/config.json.",
+        help="Install Claude Code, Codex, and OpenCode hooks/plugins and write ~/.config/yoru/config.json.",
     )
     p_init.add_argument(
         "--server",
