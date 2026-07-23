@@ -305,12 +305,22 @@ def _drain_file(
     offset: int,
     server: str,
     token: str,
-) -> int:
-    """Read from `offset` to EOF, POSTing each derived event. Returns new offset."""
+) -> int | None:
+    """Read from `offset` to EOF, POSTing each derived event. Returns new
+    offset — or None when the file is gone, so the caller evicts it.
+
+    Eviction matters: transcripts get cleaned up (session pruning, worktree
+    deletion) while the tailer keeps running for weeks. Before this, a dead
+    path stayed tracked forever and printed an ENOENT line EVERY poll —
+    one deleted file ≈ 86k log lines/day, and a fleet of them once grew
+    the launchd log to 75 GB.
+    """
     try:
         with open(path, "rb") as f:
             f.seek(offset)
             remainder = f.read()
+    except FileNotFoundError:
+        return None
     except OSError as e:
         print(f"[tailer] read {path}: {e}", file=sys.stderr)
         return offset
@@ -344,6 +354,15 @@ def _drain_file(
 def run() -> None:
     server, token = _load_config()
     state = _load_state()
+    # Startup hygiene: drop state entries whose transcript no longer exists —
+    # they'd otherwise sit in the state file forever (eviction below only
+    # covers files that die while we're running).
+    stale = [k for k in state if not os.path.exists(k)]
+    for k in stale:
+        del state[k]
+    if stale:
+        _save_state(state)
+        print(f"[tailer] purged {len(stale)} stale state entries", file=sys.stderr)
     last_rescan = 0.0
     tracked: dict[str, Path] = {}  # abs-path-str → Path
     print(f"[tailer] server={server} watching {_PROJECTS_DIR}", file=sys.stderr)
@@ -370,6 +389,15 @@ def run() -> None:
         for key, path in list(tracked.items()):
             offset = state.get(key, 0)
             new_offset = _drain_file(path, offset, server, token)
+            if new_offset is None:
+                # Transcript deleted — stop polling it and drop its offset.
+                # If it ever reappears the rescan re-adds it seeked to END
+                # (same first-discovery rule: no backfill).
+                tracked.pop(key, None)
+                state.pop(key, None)
+                any_change = True
+                print(f"[tailer] evicted deleted transcript {key}", file=sys.stderr)
+                continue
             if new_offset != offset:
                 state[key] = new_offset
                 any_change = True
