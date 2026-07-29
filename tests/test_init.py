@@ -4,6 +4,13 @@ import argparse
 import json
 import stat
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cwd(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
 
 def _args(
     server: str,
@@ -40,6 +47,24 @@ def test_init_writes_config_and_hook(monkeypatch, tmp_path):
     body = hook_path.read_text()
     assert "api/v1/sessions/events" in body
     assert "rcpt_ABC" in cfg_path.read_text()
+
+    codex_hook = tmp_path / ".codex" / "hooks" / "yoru.py"
+    assert codex_hook.is_file()
+    assert stat.S_IMODE(codex_hook.stat().st_mode) == 0o755
+    assert '"agent": "codex"' in codex_hook.read_text()
+
+    codex_hooks = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    session_start = codex_hooks["hooks"]["SessionStart"][0]
+    assert session_start["hooks"][0]["type"] == "command"
+    assert session_start["hooks"][0]["command"].endswith(".codex/hooks/yoru.py")
+    post_tools = codex_hooks["hooks"]["PostToolUse"]
+    assert {entry["matcher"] for entry in post_tools} >= {"Bash", "apply_patch", "Edit", "Write"}
+
+    opencode_plugin = tmp_path / ".opencode" / "plugins" / "yoru.ts"
+    assert opencode_plugin.is_file()
+    assert 'agent: "opencode"' in opencode_plugin.read_text()
+    opencode_pkg = json.loads((tmp_path / ".opencode" / "package.json").read_text())
+    assert opencode_pkg["dependencies"]["@opencode-ai/plugin"] == "latest"
 
 
 def test_init_lands_public_skill(monkeypatch, tmp_path):
