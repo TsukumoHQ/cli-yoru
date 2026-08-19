@@ -135,6 +135,36 @@ def _write_hook_script() -> None:
     os.chmod(_HOOK_PATH, 0o755)
 
 
+def _unregister_hook() -> None:
+    """Remove ONLY the enforce PreToolUse entry from settings.json, leaving the
+    streamer's entries and every other user key intact. Idempotent — a no-op if
+    the entry (or the file) isn't there. Atomic write."""
+    if not _SETTINGS_PATH.exists():
+        return
+    try:
+        obj = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return  # don't clobber an unparseable user file on a teardown
+    if not isinstance(obj, dict):
+        return
+    hooks = obj.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    entries = hooks.get("PreToolUse")
+    if not isinstance(entries, list):
+        return
+    kept = [e for e in entries if not _is_enforce_entry(e)]
+    if len(kept) == len(entries):
+        return  # nothing of ours to remove
+    if kept:
+        hooks["PreToolUse"] = kept
+    else:
+        hooks.pop("PreToolUse", None)  # don't leave an empty list behind
+    tmp = _SETTINGS_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    os.replace(tmp, _SETTINGS_PATH)
+
+
 def enable() -> int:
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     _POLICY_MARKER.write_text(
@@ -151,11 +181,18 @@ def enable() -> int:
 
 
 def disable() -> int:
-    existed = _POLICY_MARKER.exists()
-    if existed:
+    # Full teardown: drop the opt-in marker AND unregister the PreToolUse hook +
+    # remove its script, so a disabled gate stops spawning bash/python on every
+    # tool call (and `status` no longer reports a lingering hook). Symmetric with
+    # enable(); the passive audit streamer is never touched.
+    existed = _POLICY_MARKER.exists() or _HOOK_PATH.exists()
+    if _POLICY_MARKER.exists():
         _POLICY_MARKER.unlink()
-    print("✓ yoru enforcement gate DISABLED." if existed
-          else "yoru enforcement gate was not enabled.")
+    _unregister_hook()
+    if _HOOK_PATH.exists():
+        _HOOK_PATH.unlink()
+    print("✓ yoru enforcement gate DISABLED — hook unregistered + removed."
+          if existed else "yoru enforcement gate was not enabled.")
     print("  (The passive audit trail is unaffected.)")
     return 0
 

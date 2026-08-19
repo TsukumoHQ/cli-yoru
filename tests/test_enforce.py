@@ -174,11 +174,38 @@ def test_enable_is_idempotent_and_preserves_streamer(_paths):
     assert settings["otherUserKey"] == {"keep": True}
 
 
-def test_disable_removes_marker(_paths, monkeypatch):
+def test_disable_full_teardown_preserves_streamer(_paths, monkeypatch):
     cfg, claude = _paths
     monkeypatch.delenv("YORU_ENFORCE", raising=False)
+    # A pre-existing streamer entry + unrelated key that disable must preserve.
+    settings_path = claude / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "hooks": {"PostToolUse": [
+            {"matcher": "*", "hooks": [{"type": "command",
+             "command": "/home/u/.claude/hooks/yoru.sh"}]}]},
+        "keep": 1,
+    }))
+
     enforce_cmd.enable()
     assert enforce_cmd.enforcement_enabled() is True
+
     enforce_cmd.disable()
+    # marker gone, gate off, hook script removed, entry unregistered.
     assert not (cfg / "enforce.json").exists()
     assert enforce_cmd.enforcement_enabled() is False
+    assert not (claude / "hooks" / "yoru-enforce.sh").exists()
+    settings = json.loads(settings_path.read_text())
+    pre = settings["hooks"].get("PreToolUse", [])
+    assert not any(
+        e["hooks"][0]["command"].endswith("yoru-enforce.sh") for e in pre
+    )
+    # streamer + unrelated key untouched.
+    assert settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].endswith("yoru.sh")
+    assert settings["keep"] == 1
+
+
+def test_disable_when_never_enabled_is_safe(_paths, monkeypatch):
+    monkeypatch.delenv("YORU_ENFORCE", raising=False)
+    # No settings file, no marker — disable must not raise.
+    assert enforce_cmd.disable() == 0
