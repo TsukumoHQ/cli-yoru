@@ -3,7 +3,15 @@ from __future__ import annotations
 import argparse
 
 from . import __version__
-from . import config, doctor_cmd, init_cmd, share_cmd, tail_cmd, update_cmd
+from . import (
+    config,
+    doctor_cmd,
+    init_cmd,
+    share_cmd,
+    tail_cmd,
+    update_cmd,
+    verify_export_cmd,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -18,7 +26,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(
-        dest="cmd", required=True, metavar="{init,tail,doctor,share,update}"
+        dest="cmd",
+        required=True,
+        metavar="{init,tail,doctor,share,update,verify-export}",
     )
 
     p_init = subparsers.add_parser(
@@ -106,6 +116,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "instance. Never pulls or restarts the server.",
     )
 
+    p_verify = subparsers.add_parser(
+        "verify-export",
+        help="Offline-verify a signed audit-export bundle (Ed25519/DSSE + chain).",
+    )
+    p_verify.add_argument(
+        "bundle",
+        help="Path to the signed bundle JSON (or '-' to read from stdin).",
+    )
+    p_verify.add_argument(
+        "--pubkey-fingerprint",
+        default=None,
+        metavar="SHA256_HEX",
+        help="Pin the deployer's public-key fingerprint (published out-of-band). "
+        "Without it the check is tamper-evident only — the embedded key is "
+        "trusted on faith.",
+    )
+
     return parser
 
 
@@ -132,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         return share_cmd.run(args)
     if args.cmd == "update":
         return update_cmd.run(args)
+    if args.cmd == "verify-export":
+        return verify_export_cmd.run(args)
 
     parser.error(f"unknown command: {args.cmd!r}")
     return 2
