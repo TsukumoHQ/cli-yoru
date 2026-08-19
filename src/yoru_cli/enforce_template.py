@@ -18,7 +18,17 @@ set -uo pipefail
 [ "${AGENT_RELAY_CHILD:-0}" = "1" ] && exit 0
 INPUT=$(cat)
 # Bounded: cap the check so a slow policy eval can never stall the terminal.
-# (settings.json also sets a per-hook `timeout` as an outer bound.) On any
-# timeout / missing binary / failure the `|| exit 0` allows the tool call.
-printf '%s' "$INPUT" | timeout 5 yoru enforce-check 2>/dev/null || exit 0
+# `timeout` is GNU coreutils and is ABSENT on default macOS (and may be
+# `gtimeout` via Homebrew), so we must NOT hard-depend on it — a bare
+# `timeout ...` there hits 'command not found', the pipe fails, and the gate
+# would silently no-op. Prefer timeout/gtimeout when present; otherwise run the
+# checker directly, still bounded by the settings.json per-hook `timeout` that
+# Claude Code enforces. Every branch keeps `|| exit 0` (fail-open).
+if command -v timeout >/dev/null 2>&1; then
+  printf '%s' "$INPUT" | timeout 5 yoru enforce-check 2>/dev/null || exit 0
+elif command -v gtimeout >/dev/null 2>&1; then
+  printf '%s' "$INPUT" | gtimeout 5 yoru enforce-check 2>/dev/null || exit 0
+else
+  printf '%s' "$INPUT" | yoru enforce-check 2>/dev/null || exit 0
+fi
 """
