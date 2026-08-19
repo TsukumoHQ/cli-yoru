@@ -6,6 +6,7 @@ from . import __version__
 from . import (
     config,
     doctor_cmd,
+    enforce_cmd,
     init_cmd,
     share_cmd,
     tail_cmd,
@@ -28,7 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="cmd",
         required=True,
-        metavar="{init,tail,doctor,share,update,verify-export}",
+        metavar="{init,tail,doctor,share,update,verify-export,enforce}",
     )
 
     p_init = subparsers.add_parser(
@@ -133,6 +134,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "trusted on faith.",
     )
 
+    p_enforce = subparsers.add_parser(
+        "enforce",
+        help="Manage the OPT-IN enforcement gate that halts dangerous ops "
+        "(default OFF; the passive audit trail is unaffected).",
+    )
+    _eg = p_enforce.add_mutually_exclusive_group()
+    _eg.add_argument("--enable", action="store_true",
+                     help="Install + enable the PreToolUse enforcement gate.")
+    _eg.add_argument("--disable", action="store_true",
+                     help="Disable the gate (no-arg `enforce` shows status).")
+
+    # Internal: the enforcement hook invokes this with the PreToolUse event on
+    # stdin; it emits a deny decision only on a match, else nothing.
+    subparsers.add_parser(
+        "enforce-check",
+        help="(internal) decision endpoint the enforcement hook calls.",
+    )
+
     return parser
 
 
@@ -161,6 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         return update_cmd.run(args)
     if args.cmd == "verify-export":
         return verify_export_cmd.run(args)
+    if args.cmd == "enforce":
+        return enforce_cmd.run(args)
+    if args.cmd == "enforce-check":
+        return enforce_cmd.check()
 
     parser.error(f"unknown command: {args.cmd!r}")
     return 2
