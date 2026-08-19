@@ -209,3 +209,24 @@ def test_disable_when_never_enabled_is_safe(_paths, monkeypatch):
     monkeypatch.delenv("YORU_ENFORCE", raising=False)
     # No settings file, no marker — disable must not raise.
     assert enforce_cmd.disable() == 0
+
+
+def test_disable_keeps_a_co_located_pretooluse_entry(_paths, monkeypatch):
+    """_unregister_hook must drop ONLY the enforce entry and KEEP any other
+    PreToolUse hook a user registered (the kept-branch)."""
+    cfg, claude = _paths
+    monkeypatch.delenv("YORU_ENFORCE", raising=False)
+    settings_path = claude / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    # A user's OWN PreToolUse hook, sitting alongside where enforce installs.
+    other = {"matcher": "Bash",
+             "hooks": [{"type": "command", "command": "/home/u/my-guard.sh"}]}
+    settings_path.write_text(json.dumps({"hooks": {"PreToolUse": [other]}}))
+
+    enforce_cmd.enable()   # adds the enforce entry next to `other`
+    enforce_cmd.disable()  # must remove ONLY enforce, keep `other`
+
+    pre = json.loads(settings_path.read_text())["hooks"]["PreToolUse"]
+    cmds = [e["hooks"][0]["command"] for e in pre]
+    assert "/home/u/my-guard.sh" in cmds
+    assert not any(c.endswith("yoru-enforce.sh") for c in cmds)
