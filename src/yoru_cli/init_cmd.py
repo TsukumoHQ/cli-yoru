@@ -180,10 +180,70 @@ def refresh_hook_assets() -> tuple[Path, Path, Path]:
     return hook_path, settings_path, skill_path
 
 
+def _revoke_previous_pairing(old_config: dict, new_token: str) -> None:
+    """--force is replacing an existing pairing — revoke the token it's
+    superseding server-side instead of leaving it live forever (the old
+    behavior: local file overwritten, server-side credential orphaned
+    indefinitely — a direct accountability hole for an audit product).
+
+    Always warns explicitly before revoking, whether or not the new pairing
+    turns out to be the same identity — the CLI has no reliable way to know
+    that in advance (the old config may predate identity tracking, and the
+    --token direct-mint path never learns the new identity at all), so an
+    unconditional warning is the only version of "no silent clobber" that
+    can't have a false negative.
+
+    EXCEPT when `new_token` is byte-identical to the old one (re-running
+    `--force` with the same `--token`/`$YORU_TOKEN`, or against an unchanged
+    env) — revoking there would immediately brick the credential we're about
+    to save (config points at a token the server just revoked, the hook
+    streams start 401ing). Same token = nothing superseded, so skip.
+    """
+    old_server = (old_config.get("server") or "").rstrip("/")
+    old_token = old_config.get("token") or ""
+    if not old_server or not old_token:
+        return
+    if old_token == new_token:
+        print(
+            "  · --force re-paired with the same token — nothing to revoke",
+            file=sys.stderr,
+        )
+        return
+    print(
+        "  ⚠ --force replaces the existing pairing — revoking the previous "
+        "token server-side",
+        file=sys.stderr,
+    )
+    try:
+        revoked = ReceiptClient(old_server, token=old_token).logout()
+    except httpx.HTTPError as e:
+        print(
+            f"  ⚠ could not revoke the previous token ({e}) — revoke it "
+            "manually from the dashboard if this is a real identity change",
+            file=sys.stderr,
+        )
+        return
+    if revoked:
+        print("  ✓ previous token revoked", file=sys.stderr)
+    else:
+        print("  · previous token was already revoked/invalid", file=sys.stderr)
+
+
 def run(args: argparse.Namespace) -> int:
-    if config.exists() and not getattr(args, "force", False):
+    force = getattr(args, "force", False)
+    if config.exists() and not force:
         print("Already installed (use --force to overwrite)", file=sys.stderr)
         return 1
+
+    old_config: dict | None = None
+    if force:
+        try:
+            old_config = config.load()
+        except (OSError, json.JSONDecodeError):
+            # --force must stay a working recovery path even from a corrupt
+            # config.json (that's the whole point of --force existing) — no
+            # old token to revoke just means we skip that step, not abort.
+            old_config = None
 
     server: str = args.server
     token: str | None = getattr(args, "token", None)
@@ -197,6 +257,9 @@ def run(args: argparse.Namespace) -> int:
         token = _pair_device(server, label, no_browser=no_browser)
         if not token:
             return 2
+
+    if old_config:
+        _revoke_previous_pairing(old_config, token)
 
     config.save({
         "server": server,

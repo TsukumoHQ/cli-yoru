@@ -77,15 +77,165 @@ def test_init_already_installed_without_force(monkeypatch, tmp_path, capsys):
     assert "Already installed" in err
 
 
+def _fake_revoke_client(*, ok: bool = True, raises: Exception | None = None):
+    """A ReceiptClient stand-in for the --force revoke path. Records the
+    server/token it was constructed with and whether .logout() was called."""
+    calls: list[dict] = []
+
+    class FakeClient:
+        def __init__(self, base_url: str, token: str | None = None) -> None:
+            self.base_url = base_url
+            self.token = token
+
+        def logout(self) -> bool:
+            calls.append({"base_url": self.base_url, "token": self.token})
+            if raises is not None:
+                raise raises
+            return ok
+
+    return FakeClient, calls
+
+
 def test_init_with_force_overwrites(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     from yoru_cli import init_cmd
+
+    FakeClient, calls = _fake_revoke_client()
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
 
     init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
     rc = init_cmd.run(_args(server="http://fake", token="rcpt_XYZ", force=True))
     assert rc == 0
     data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
     assert data["token"] == "rcpt_XYZ"
+
+
+def test_init_force_revokes_previous_token_server_side(monkeypatch, tmp_path):
+    # DEC-yoru-design-ruling-1 A.3#4 — the accountability hole this ticket
+    # closes: --force must not orphan the credential it's replacing.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    FakeClient, calls = _fake_revoke_client(ok=True)
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    init_cmd.run(_args(server="http://fake", token="rcpt_OLD"))
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_NEW", force=True))
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert calls[0]["base_url"] == "http://fake"
+    assert calls[0]["token"] == "rcpt_OLD"  # the SUPERSEDED token, never the new one
+
+
+def test_init_force_same_token_skips_revoke_does_not_brick_itself(monkeypatch, tmp_path, capsys):
+    # Round-2 review finding: --force re-run with the SAME --token/$YORU_TOKEN
+    # was revoking the token it was about to save — the config ends up
+    # pointing at a token the server just killed, hook stream 401s forever.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import config, init_cmd
+
+    FakeClient, calls = _fake_revoke_client(ok=True)
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    init_cmd.run(_args(server="http://fake", token="rcpt_SAME"))
+    capsys.readouterr()
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_SAME", force=True))
+
+    assert rc == 0
+    assert calls == []  # never revoked — it's the credential we're about to keep
+    assert config.load()["token"] == "rcpt_SAME"
+    assert "nothing to revoke" in capsys.readouterr().err.lower()
+
+
+def test_init_without_force_never_calls_logout(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    FakeClient, calls = _fake_revoke_client()
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    assert calls == []
+
+
+def test_init_force_warns_explicitly_before_revoking(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    FakeClient, _calls = _fake_revoke_client(ok=True)
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    capsys.readouterr()  # drain first run's output
+    init_cmd.run(_args(server="http://fake", token="rcpt_XYZ", force=True))
+
+    err = capsys.readouterr().err
+    assert "force" in err.lower()
+    assert "revok" in err.lower()
+
+
+def test_init_force_revoke_failure_does_not_block_init(monkeypatch, tmp_path, capsys):
+    # A network failure revoking the old token must not fail the whole
+    # re-pair — surface it loudly, don't leave the user stuck unpaired.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+    import httpx
+
+    FakeClient, calls = _fake_revoke_client(raises=httpx.ConnectError("boom"))
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    capsys.readouterr()
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_XYZ", force=True))
+
+    assert rc == 0
+    assert len(calls) == 1
+    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    assert data["token"] == "rcpt_XYZ"
+    err = capsys.readouterr().err
+    assert "could not revoke" in err.lower()
+
+
+def test_init_force_already_revoked_token_does_not_warn_as_failure(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    FakeClient, _calls = _fake_revoke_client(ok=False)  # already revoked/invalid
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    capsys.readouterr()
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_XYZ", force=True))
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "could not revoke" not in err.lower()
+
+
+def test_init_force_recovers_from_corrupt_config(monkeypatch, tmp_path) -> None:
+    # Regression: --force must stay a working recovery path even when the
+    # existing config.json is corrupt (unparseable JSON) — that's the whole
+    # point of --force existing. Revoking a corrupt-config's "old token" is
+    # simply skipped, not a crash.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    FakeClient, calls = _fake_revoke_client(ok=True)
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+
+    cfg_path = tmp_path / ".config" / "yoru" / "config.json"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("{not valid json", encoding="utf-8")
+
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_NEW", force=True))
+
+    assert rc == 0
+    assert calls == []  # nothing to revoke — no crash, no bogus revoke attempt
+    data = json.loads(cfg_path.read_text())
+    assert data["token"] == "rcpt_NEW"
 
 
 def _fake_pairing_client(poll_result: dict):
