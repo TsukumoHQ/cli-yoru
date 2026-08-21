@@ -54,6 +54,35 @@ def test_run_lock_refuses_second_instance(tmp_path: Path, monkeypatch) -> None:
         first.close()
 
 
+def test_losing_acquire_attempt_does_not_truncate_winners_pid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """review-029e87c3 round-3 finding (cto-tsukumo): the pre-fix
+    `_acquire_run_lock` opened the run-lock with `open(path, "w")` —
+    truncating UNCONDITIONALLY on open, before the flock attempt. A LOSING
+    acquirer (refused because a real holder is running) still executed that
+    truncating open first, wiping the live holder's PID the instant a
+    second `run()` was merely ATTEMPTED — not just on a successful second
+    acquire. This silently broke read_status()'s new PID-liveness check:
+    it would read an empty file and report `running=False` for a
+    genuinely-running tailer for the rest of the holder's life."""
+    import os
+
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+
+    winner = tt._acquire_run_lock()
+    assert winner is not None
+    pid_written = tt._RUN_LOCK_PATH.read_text()
+    assert pid_written == str(os.getpid())
+
+    loser = tt._acquire_run_lock()
+    assert loser is None
+
+    # The losing attempt must not have disturbed the winner's PID content.
+    assert tt._RUN_LOCK_PATH.read_text() == pid_written
+    winner.close()
+
+
 def test_run_lock_releases_on_close(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
     first = tt._acquire_run_lock()
@@ -269,18 +298,72 @@ def test_read_status_reports_not_running_and_no_history(tmp_path: Path, monkeypa
     }
 
 
-def test_read_status_reports_running_when_lock_held(tmp_path: Path, monkeypatch) -> None:
+def test_read_status_reports_running_for_a_live_pid(tmp_path: Path, monkeypatch) -> None:
+    """review-029e87c3 follow-up: `read_status` no longer flocks the
+    run-lock at all (see its docstring — LOCK_SH still conflicts with a
+    concurrent LOCK_EX|LOCK_NB, disproven by the reviewer's own test on the
+    prior version). It checks PID liveness instead. A real subprocess (not
+    the test's own PID — which stays alive across `_acquire_run_lock`
+    release, unlike a real tailer process exiting) proves the actual
+    alive → dead transition this is meant to detect."""
+    import subprocess
+
     monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
     _patch_metrics_paths(tmp_path, monkeypatch)
 
-    held = tt._acquire_run_lock()
-    assert held is not None
+    proc = subprocess.Popen(["sleep", "5"])
     try:
+        tt._RUN_LOCK_PATH.write_text(str(proc.pid))
         assert tt.read_status()["running"] is True
     finally:
-        held.close()
+        proc.terminate()
+        proc.wait(timeout=5)
 
-    assert tt.read_status()["running"] is False
+    assert tt.read_status()["running"] is False  # PID now dead — stale lockfile
+
+
+def test_read_status_does_not_truncate_run_lock_pid_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """review-029e87c3 follow-up: an earlier version opened the run-lock
+    with `open(path, "w")` (implicit O_TRUNC) just to probe it — wiping
+    whatever PID a real holder had written. `read_status` never opens the
+    file for writing at all now (plain `.read_text()`), so this is
+    structurally impossible, not just avoided by convention."""
+    import os
+
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    tt._RUN_LOCK_PATH.write_text(str(os.getpid()))
+    pid_written = tt._RUN_LOCK_PATH.read_text()
+
+    tt.read_status()
+
+    assert tt._RUN_LOCK_PATH.read_text() == pid_written
+
+
+def test_read_status_never_calls_flock(tmp_path: Path, monkeypatch) -> None:
+    """Direct proof of the fix: `read_status` must not touch the run-lock's
+    flock state AT ALL — any flock call it makes (SH or EX) can transiently
+    conflict with a concurrently-starting tailer's own LOCK_EX|LOCK_NB and
+    cause a false "already running" refusal that has nothing to do with an
+    actual running instance."""
+    import os
+
+    import fcntl
+
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    _patch_metrics_paths(tmp_path, monkeypatch)
+    tt._RUN_LOCK_PATH.write_text(str(os.getpid()))
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("read_status must never call fcntl.flock")
+
+    monkeypatch.setattr(fcntl, "flock", _fail_if_called)
+
+    status = tt.read_status()
+    assert status["running"] is True  # our own PID — genuinely alive
 
 
 def test_read_status_surfaces_last_post_and_error(tmp_path: Path, monkeypatch) -> None:

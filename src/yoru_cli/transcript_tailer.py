@@ -161,26 +161,37 @@ def read_status() -> dict[str, Any]:
     """Tailer observability snapshot for `yoru doctor` (029e87c3).
 
     Returns (all keys optional — absent if the tailer has never run):
-      running          bool  — another process currently holds the run-lock
+      running          bool  — the PID `_acquire_run_lock` wrote is alive
       last_post_ts     float | None  — epoch seconds of the last successful POST
       last_error_ts    float | None  — epoch seconds of the last failed POST
       error_count      int   — cumulative POST failures across the tailer's life
+
+    Deliberately does NOT flock the run-lock at all — flock's LOCK_SH and
+    LOCK_EX are mutually exclusive (only SH+SH coexist; POSIX flock(2)), so
+    ANY lock this probe takes, shared or exclusive, can transiently contend
+    with a concurrently-STARTING tailer's own LOCK_EX|LOCK_NB and make it
+    see false contention and refuse to start (review-029e87c3 follow-up — an
+    earlier LOCK_EX version had exactly this bug; a LOCK_SH "fix" was
+    proposed and disproved by the reviewer's own executed test, since SH
+    still blocks a concurrent EX request). Standard PID-liveness check
+    instead: read the PID `_acquire_run_lock` wrote into the file, probe it
+    with a zero-signal `os.kill` — never touches the lock, so it cannot
+    possibly race a real acquire. `_acquire_run_lock`'s flock is still
+    released automatically by the OS on process death (crash, kill -9), so
+    this reports the same "truly not running" answer that case too — it just
+    gets there without ever contending for the lock itself.
     """
     running = False
-    fh = None
     try:
-        fh = open(_RUN_LOCK_PATH, "w")
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Acquired it ourselves → nobody else was holding it.
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-    except OSError as e:
-        if e.errno in (errno.EACCES, errno.EAGAIN):
-            running = True
-        # Any other OSError (e.g. the parent dir doesn't exist yet — never
-        # run) just means "never run" — leave running=False.
-    finally:
-        if fh is not None:
-            fh.close()
+        pid = int(_RUN_LOCK_PATH.read_text().strip())
+        os.kill(pid, 0)  # raises if the PID isn't a live process; no-op if it is
+        running = True
+    except ProcessLookupError:
+        running = False  # PID recorded but that process is dead — stale lockfile
+    except PermissionError:
+        running = True  # alive, just owned by another user — still "running"
+    except (FileNotFoundError, ValueError):
+        running = False  # never run, or a torn/empty read mid-startup
     metrics = _load_metrics()
     return {
         "running": running,
@@ -202,9 +213,21 @@ def _acquire_run_lock() -> object | None:
     (keep it referenced for the process lifetime — the lock releases when it
     closes or the process exits) or None if another instance already holds
     it.
+
+    Opens with O_RDWR|O_CREAT — NOT `open(path, "w")` — deliberately. `"w"`
+    mode truncates on open UNCONDITIONALLY, before the flock attempt even
+    happens: a LOSING process (one that fails to acquire because a real
+    holder is running) still executes that truncating open first, wiping
+    the live holder's PID out from under it the instant a second `run()` is
+    merely attempted — not just on a successful second acquire (review-
+    029e87c3 round-3 finding: this made `read_status()`'s new PID-liveness
+    check read an empty file and report `running=False` for a genuinely
+    running tailer, permanently, for the rest of that holder's life). Only
+    the confirmed winner (flock actually acquired) truncates+writes now.
     """
     _RUN_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(_RUN_LOCK_PATH, "w")
+    fd = os.open(_RUN_LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o644)
+    fh = os.fdopen(fd, "r+")
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as e:
@@ -212,6 +235,10 @@ def _acquire_run_lock() -> object | None:
             fh.close()
             return None
         raise
+    # Confirmed exclusive holder now — safe to overwrite whatever a prior
+    # holder (or a losing acquirer's truncating open, pre-fix) left behind.
+    fh.seek(0)
+    fh.truncate()
     fh.write(str(os.getpid()))
     fh.flush()
     return fh
