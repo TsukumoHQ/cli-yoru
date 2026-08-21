@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config
+from . import config, git_hooks
 from .api import ReceiptClient
 from .hook_template import HOOK_SCRIPT
 from .skill_template import SKILL_MD, SKILL_NAME
@@ -287,5 +287,15 @@ def run(args: argparse.Namespace) -> int:
     print("\u2713 hook     \u2192 ~/.claude/hooks/yoru.sh")
     print("\u2713 settings \u2192 ~/.claude/settings.json (hook registered)")
     print("\u2713 skill    \u2192 ~/.claude/skills/yoru/SKILL.md (Claude can drive setup + usage)")
+
+    # Independent git capture floor (B3 slice1) \u2014 opt-in per repo: only
+    # wired when `yoru init` is actually run from inside a git worktree,
+    # never an unprompted scan of arbitrary paths (design risk 5).
+    root = git_hooks.repo_root()
+    if root is not None:
+        installed = git_hooks.install_git_hooks(root)
+        if installed:
+            print(f"\u2713 git hooks \u2192 {root} ({', '.join(installed)}) \u2014 commits captured even if no agent runs here")
+
     print("Next: run Claude Code normally; first event streams to /sessions/events.")
     return 0

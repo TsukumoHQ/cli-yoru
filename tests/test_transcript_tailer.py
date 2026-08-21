@@ -378,3 +378,116 @@ def test_read_status_surfaces_last_post_and_error(tmp_path: Path, monkeypatch) -
     assert status["last_post_ts"] is not None
     assert status["last_error_ts"] is not None
     assert status["error_count"] == 2
+
+
+# ---------- git-spool drain (B3 slice1, ruling D6.3) ----------
+
+def _write_spool_event(spool_dir: Path, name: str, event: dict) -> None:
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    (spool_dir / name).write_text(json.dumps(event))
+
+
+def test_drain_git_spool_posts_and_deletes_on_success(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from yoru_cli import config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    spool_dir = config.git_spool_dir()
+    _write_spool_event(spool_dir, "1.json", {"session_id": "git-x", "content": "c1"})
+
+    posted = []
+
+    def _fake_post(server, token, event):
+        posted.append(event)
+        return True
+
+    monkeypatch.setattr(tt, "_post", _fake_post)
+    tt._drain_git_spool("http://fake", "rcpt_test_abcd")
+
+    assert [e["session_id"] for e in posted] == ["git-x"]
+    assert list(spool_dir.glob("*.json")) == []
+
+
+def test_drain_git_spool_leaves_file_on_post_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from yoru_cli import config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    spool_dir = config.git_spool_dir()
+    _write_spool_event(spool_dir, "1.json", {"session_id": "git-x", "content": "c1"})
+
+    monkeypatch.setattr(tt, "_post", lambda server, token, event: False)
+    tt._drain_git_spool("http://fake", "rcpt_test_abcd")
+
+    remaining = list(spool_dir.glob("*.json"))
+    assert len(remaining) == 1
+    status = tt.read_status()
+    assert status["error_count"] == 1
+
+
+def test_drain_git_spool_one_permanent_failure_never_wedges_later_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression (round-1 review finding): a `break` on the first failed
+    POST used to leave every later file undrained forever once one file
+    started permanently failing (e.g. a 422 that will never succeed) —
+    silently dropping all later audit events tick after tick. A failure
+    must only skip that one file, never block the rest of the batch."""
+    from yoru_cli import config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    spool_dir = config.git_spool_dir()
+    _write_spool_event(spool_dir, "1-a.json", {"session_id": "git-a"})
+    _write_spool_event(spool_dir, "2-b.json", {"session_id": "git-b"})
+    _write_spool_event(spool_dir, "3-c.json", {"session_id": "git-c"})
+
+    def _fail_only_b(server, token, event):
+        return event["session_id"] != "git-b"
+
+    monkeypatch.setattr(tt, "_post", _fail_only_b)
+    tt._drain_git_spool("http://fake", "rcpt_test_abcd")
+
+    remaining = sorted(p.name for p in spool_dir.glob("*.json"))
+    # a and c succeeded+deleted despite b (in the middle) failing; b alone survives.
+    assert remaining == ["2-b.json"]
+
+
+def test_drain_git_spool_drops_unparseable_file(tmp_path: Path, monkeypatch) -> None:
+    from yoru_cli import config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    spool_dir = config.git_spool_dir()
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    (spool_dir / "bad.json").write_text("{not json")
+
+    monkeypatch.setattr(tt, "_post", lambda server, token, event: True)
+    tt._drain_git_spool("http://fake", "rcpt_test_abcd")
+
+    assert list(spool_dir.glob("*.json")) == []
+
+
+def test_drain_git_spool_noop_when_dir_absent(tmp_path: Path, monkeypatch) -> None:
+    from yoru_cli import config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("must not POST when the spool dir doesn't exist")
+
+    monkeypatch.setattr(tt, "_post", _fail_if_called)
+    tt._drain_git_spool("http://fake", "rcpt_test_abcd")  # no raise

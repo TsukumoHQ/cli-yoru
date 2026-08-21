@@ -7,6 +7,7 @@ from . import (
     config,
     doctor_cmd,
     enforce_cmd,
+    git_hook_run,
     init_cmd,
     logout_cmd,
     rotate_cmd,
@@ -195,6 +196,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="(internal) decision endpoint the enforcement hook calls.",
     )
 
+    # Internal: the installed post-commit/pre-push git hooks (git_hooks.py)
+    # shell out to this — a real console-script entrypoint, not
+    # `python3 -m yoru_cli...`, so it resolves to the correct interpreter
+    # under pipx/uv-tool-install regardless of what `python3` means on PATH
+    # (B3 slice1 round-2 review finding).
+    p_ghr = subparsers.add_parser(
+        "git-hook-run",
+        help="(internal) invoked by the installed git hooks — captures commit/push events.",
+    )
+    p_ghr.add_argument("hook_kind", choices=["post-commit", "pre-push"])
+    p_ghr.add_argument("hook_args", nargs="*")
+
     return parser
 
 
@@ -233,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         return enforce_cmd.run(args)
     if args.cmd == "enforce-check":
         return enforce_cmd.check()
+    if args.cmd == "git-hook-run":
+        return git_hook_run.main([args.hook_kind, *args.hook_args])
 
     parser.error(f"unknown command: {args.cmd!r}")
     return 2

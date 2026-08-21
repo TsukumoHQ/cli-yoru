@@ -52,6 +52,38 @@ def test_init_writes_config_and_hook(monkeypatch, tmp_path):
     assert "rcpt_ABC" in cfg_path.read_text()
 
 
+def test_init_installs_git_hooks_when_run_inside_a_repo(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    repo = tmp_path / "myrepo"
+    repo.mkdir()
+    subprocess.check_call(["git", "init", "-q"], cwd=repo)
+    monkeypatch.chdir(repo)
+
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    assert rc == 0
+
+    for name in ("post-commit", "pre-push"):
+        hook_path = repo / ".git" / "hooks" / name
+        assert hook_path.is_file()
+        assert "yoru git-hook-run" in hook_path.read_text()
+
+
+def test_init_outside_a_git_repo_skips_git_hooks(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import init_cmd
+
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    monkeypatch.chdir(not_a_repo)
+
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    assert rc == 0  # never fails init just because cwd isn't a git repo
+
+
 def test_init_lands_public_skill(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     from yoru_cli import init_cmd

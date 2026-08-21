@@ -246,3 +246,24 @@ def tail_metrics_path() -> Path:
     if identity_id is None:
         return _root_dir() / "tail-metrics.json"
     return _slot_dir(identity_id) / "tail-metrics.json"
+
+
+def git_spool_dir() -> Path:
+    """~/.config/yoru/identities/<active>/git-spool/ — the thin-spool drop
+    zone for the independent git-hook capture floor (B3 slice1, ruling
+    D6.3): the post-commit/pre-push hooks write a JSON file here and return
+    immediately (no network in the hook), the shared tailer drains it async
+    on its normal poll loop. Same fallback posture as `tail_state_path`."""
+    identity_id = active_identity_id()
+    if identity_id is None:
+        return _root_dir() / "git-spool"
+    return _slot_dir(identity_id) / "git-spool"
+
+
+def ensure_git_spool_dir() -> Path:
+    """`git_spool_dir()`, created at 0700 (chained up to `_root_dir()`) if
+    missing. The hook writer and the tailer drainer both call this rather
+    than assuming the directory already exists."""
+    d = git_spool_dir()
+    _ensure_private_dir(d)
+    return d

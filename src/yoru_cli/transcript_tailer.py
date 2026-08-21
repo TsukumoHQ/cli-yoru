@@ -244,6 +244,40 @@ def _acquire_run_lock() -> object | None:
     return fh
 
 
+def _drain_git_spool(server: str, token: str) -> None:
+    """Drains `config.git_spool_dir()` — the thin-spool drop zone the git
+    post-commit/pre-push hooks write to (B3 slice1, ruling D6.3: the hook
+    itself never touches the network, this shared tailer does the POST
+    async on its normal poll loop). Each file is one already-shaped,
+    self-contained event body (its own `ts`/`session_id`) — unlike the
+    transcript tailer's byte-offset stream, there is no ordering constraint
+    across spool files, so one file's failure must never block the rest of
+    the batch. (Round-1 review finding: an earlier version `break`-ed on the
+    first failed POST to "preserve order" — a single permanently-rejected
+    file, e.g. a too-large field the backend 422s forever, then wedged the
+    entire spool, silently dropping every later file's audit events tick
+    after tick. Continuing past a failure is the fix — a real outage still
+    retries every file every tick, same as before, it just no longer starves
+    files behind the one that's stuck.)"""
+    spool_dir = config.git_spool_dir()
+    if not spool_dir.is_dir():
+        return
+    for path in sorted(spool_dir.glob("*.json")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                event = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            # Unreadable/corrupt spool file — drop it rather than retry
+            # forever on something that will never parse.
+            path.unlink(missing_ok=True)
+            continue
+        if _post(server, token, event):
+            path.unlink(missing_ok=True)
+            _record_post_success()
+        else:
+            _record_post_error()
+
+
 def _post(server: str, token: str, event: dict[str, Any]) -> bool:
     """One-event ingest. Returns True on success — the caller only advances the
     read offset past acked events, so nothing is lost on a backend outage."""
@@ -636,6 +670,7 @@ def run() -> None:
                 for k in evicted:
                     disk_state.pop(k, None)
                 disk_state.update(updated)
+        _drain_git_spool(server, token)
         time.sleep(_POLL_INTERVAL_SEC)
 
 
