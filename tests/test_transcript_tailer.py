@@ -6,7 +6,10 @@ the tailer runs stayed tracked forever and printed an ENOENT line every poll.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
+
+import pytest
 
 from yoru_cli import transcript_tailer as tt
 
@@ -39,3 +42,81 @@ def test_state_purge_on_startup(tmp_path: Path, monkeypatch) -> None:
 
     saved = json.loads(state_path.read_text())
     assert list(saved) == [str(alive)]
+
+
+def test_run_lock_refuses_second_instance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    first = tt._acquire_run_lock()
+    assert first is not None
+    try:
+        assert tt._acquire_run_lock() is None
+    finally:
+        first.close()
+
+
+def test_run_lock_releases_on_close(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    first = tt._acquire_run_lock()
+    assert first is not None
+    first.close()
+
+    second = tt._acquire_run_lock()
+    assert second is not None
+    second.close()
+
+
+def test_run_exits_cleanly_when_lock_already_held(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    held = tt._acquire_run_lock()
+    assert held is not None
+    try:
+        with pytest.raises(SystemExit) as exc:
+            tt.run()
+        assert exc.value.code == 1
+    finally:
+        held.close()
+
+
+def _patch_state_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_STATE_PATH", tmp_path / "tail-state.json")
+    monkeypatch.setattr(tt, "_STATE_LOCK_PATH", tmp_path / "tail-state.json.lock")
+
+
+def test_state_txn_preserves_key_written_by_another_transaction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Simulates backfill() bumping one transcript's offset while a live
+    # tailer's run() loop saves a different transcript's offset in between —
+    # the old bare load/mutate/save would silently drop whichever wrote last.
+    _patch_state_paths(tmp_path, monkeypatch)
+
+    with tt._state_txn() as state:
+        state["a.jsonl"] = 10
+    with tt._state_txn() as state:
+        state["b.jsonl"] = 20
+
+    assert tt._load_state() == {"a.jsonl": 10, "b.jsonl": 20}
+
+
+def test_state_txn_no_lost_updates_under_thread_concurrency(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_state_paths(tmp_path, monkeypatch)
+    n_threads, n_writes = 8, 25
+
+    def worker(idx: int) -> None:
+        key = f"session-{idx}.jsonl"
+        for i in range(n_writes):
+            with tt._state_txn() as state:
+                state[key] = i
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    final = tt._load_state()
+    assert len(final) == n_threads
+    for idx in range(n_threads):
+        assert final[f"session-{idx}.jsonl"] == n_writes - 1

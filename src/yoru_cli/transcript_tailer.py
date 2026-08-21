@@ -23,6 +23,9 @@ v0 keeps it dependency-free — stdlib-only, one thread per file.
 """
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
 import json
 import os
 import sys
@@ -30,11 +33,13 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 _PROJECTS_DIR = Path.home() / ".claude/projects"
 _CONFIG_PATH = Path.home() / ".config/yoru/config.json"
 _STATE_PATH = Path.home() / ".config/yoru/tail-state.json"
+_STATE_LOCK_PATH = Path.home() / ".config/yoru/tail-state.json.lock"
+_RUN_LOCK_PATH = Path.home() / ".config/yoru/tailer.run.lock"
 _POLL_INTERVAL_SEC = 1.0
 _RESCAN_INTERVAL_SEC = 5.0
 
@@ -67,6 +72,55 @@ def _save_state(state: dict[str, int]) -> None:
     with open(tmp, "w") as f:
         json.dump(state, f)
     tmp.replace(_STATE_PATH)
+
+
+@contextlib.contextmanager
+def _state_txn() -> Iterator[dict[str, int]]:
+    """Locked read-modify-write over tail-state.json.
+
+    Every mutation site must go through this — a bare load/mutate/save (the
+    old shape) loses the other writer's update under a race. The singleton
+    run-lock (see _acquire_run_lock) keeps two tailers from racing each
+    other, but backfill() is a separate one-shot process that can still run
+    concurrently with a live tailer, so the state file itself needs its own
+    lock independent of that.
+    """
+    _STATE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK_PATH, "w") as lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            state = _load_state()
+            yield state
+            _save_state(state)
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _acquire_run_lock() -> object | None:
+    """Exclusive, non-blocking singleton lock for run().
+
+    Two tailer processes tracking the same $HOME both glob the same
+    transcripts into their own in-memory `state` dict, loaded once at
+    startup — locking the state file alone can't stop them serving each
+    other stale offsets and stomping one another's progress (dropped or
+    duplicated events, the audit-integrity bug this exists to close). Refuse
+    the second instance outright instead. Returns the open lock file handle
+    (keep it referenced for the process lifetime — the lock releases when it
+    closes or the process exits) or None if another instance already holds
+    it.
+    """
+    _RUN_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(_RUN_LOCK_PATH, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        if e.errno in (errno.EACCES, errno.EAGAIN):
+            fh.close()
+            return None
+        raise
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
 
 
 def _post(server: str, token: str, event: dict[str, Any]) -> bool:
@@ -352,17 +406,29 @@ def _drain_file(
 
 
 def run() -> None:
+    lock = _acquire_run_lock()
+    if lock is None:
+        print(
+            "[tailer] another transcript_tailer is already running for this "
+            "$HOME (tailer.run.lock held) — refusing to start a second "
+            "instance, it would race tail-state.json and drop/duplicate "
+            "events",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     server, token = _load_config()
-    state = _load_state()
     # Startup hygiene: drop state entries whose transcript no longer exists —
     # they'd otherwise sit in the state file forever (eviction below only
-    # covers files that die while we're running).
-    stale = [k for k in state if not os.path.exists(k)]
-    for k in stale:
-        del state[k]
+    # covers files that die while we're running). Locked so a concurrent
+    # backfill() touching the same file can't lose this purge or vice versa.
+    with _state_txn() as state:
+        stale = [k for k in state if not os.path.exists(k)]
+        for k in stale:
+            del state[k]
     if stale:
-        _save_state(state)
         print(f"[tailer] purged {len(stale)} stale state entries", file=sys.stderr)
+    state = _load_state()
     last_rescan = 0.0
     tracked: dict[str, Path] = {}  # abs-path-str → Path
     print(f"[tailer] server={server} watching {_PROJECTS_DIR}", file=sys.stderr)
@@ -385,7 +451,8 @@ def run() -> None:
                                 state[key] = 0
             last_rescan = now
 
-        any_change = False
+        updated: dict[str, int] = {}
+        evicted: list[str] = []
         for key, path in list(tracked.items()):
             offset = state.get(key, 0)
             new_offset = _drain_file(path, offset, server, token)
@@ -395,14 +462,21 @@ def run() -> None:
                 # (same first-discovery rule: no backfill).
                 tracked.pop(key, None)
                 state.pop(key, None)
-                any_change = True
+                evicted.append(key)
                 print(f"[tailer] evicted deleted transcript {key}", file=sys.stderr)
                 continue
             if new_offset != offset:
                 state[key] = new_offset
-                any_change = True
-        if any_change:
-            _save_state(state)
+                updated[key] = new_offset
+        if updated or evicted:
+            # Merge only this iteration's deltas into the on-disk state under
+            # lock, rather than blind-overwriting with our whole in-memory
+            # copy — a concurrent backfill() may have written an unrelated
+            # key in between our last load and now.
+            with _state_txn() as disk_state:
+                for k in evicted:
+                    disk_state.pop(k, None)
+                disk_state.update(updated)
         time.sleep(_POLL_INTERVAL_SEC)
 
 
@@ -469,11 +543,13 @@ def backfill(session_id: str, wipe: bool = True) -> None:
     _flush()
     print(f"[backfill] emitted {count} events for session {session_id}", file=sys.stderr)
 
-    # 4. bump the saved offset to EOF so the live tailer doesn't re-emit
-    state = _load_state()
+    # 4. bump the saved offset to EOF so the live tailer doesn't re-emit.
+    # Locked merge, not a bare load/mutate/save — a live tailer process may
+    # be updating other keys in tail-state.json at the same moment.
     try:
-        state[str(path)] = path.stat().st_size
-        _save_state(state)
+        eof = path.stat().st_size
+        with _state_txn() as state:
+            state[str(path)] = eof
     except OSError:
         pass
 
