@@ -241,3 +241,57 @@ def test_hook_path_and_reconcile_path_produce_identical_entry_uuid(tmp_path, mon
 
     assert hook_event["entry_uuid"] == from_reconcile_event["entry_uuid"] == f"git-commit-{sha}"
     assert git_reconcile  # imported for clarity that both modules share build_commit_event
+
+
+def test_hook_path_and_reconcile_path_produce_identical_session_id(tmp_path, monkeypatch):
+    """AC #2's other half (review-ff35c6b9 non-blocking finding, ticket
+    a18d5235): entry_uuid equality alone doesn't prove the dedup key
+    (session_id, entry_uuid) actually collapses to one row — the two paths
+    must also agree on session_id, which is derived from a repo_root STRING
+    each path resolves independently in production:
+
+    - the hook path: `git_hook_run.main()` resolves it from `os.getcwd()`
+      via `git rev-parse --show-toplevel` at commit time (~:197)
+    - the reconcile path: `git_hooks.repo_root()` resolves it once at
+      `yoru init` time (also `git rev-parse --show-toplevel`, ~git_hooks.py:47-59)
+      and that string is threaded through `register_repo` -> the reconcile
+      state -> `reconcile_repo`'s `build_commit_event(sha, repo_path)`
+
+    This exercises BOTH real call sites (not two direct calls with the same
+    hand-picked string) and asserts the session_id they land on for the same
+    commit is identical.
+    """
+    from yoru_cli import config, git_hook_run, git_hooks, git_reconcile
+
+    repo = _init_repo_with_identity(tmp_path, monkeypatch)
+    _commit(repo, "seed.txt", "seed commit")
+
+    # Registration-time resolution, exactly as init_cmd.run() does it.
+    monkeypatch.chdir(repo)
+    root = git_hooks.repo_root()
+    assert root is not None
+    git_reconcile.register_repo(str(root))
+
+    sha = _commit(repo, "a.txt", "commit under test")
+
+    # Hook-path resolution: git_hook_run.main() re-derives repo_root from
+    # os.getcwd() internally — do not pass it in, let production code do it.
+    rc = git_hook_run.main(["post-commit", sha])
+    assert rc == 0
+    hook_events = _spool_events(config.git_spool_dir())
+    assert len(hook_events) == 1
+    hook_session_id = hook_events[0]["session_id"]
+
+    for f in config.git_spool_dir().glob("*.json"):
+        f.unlink()
+
+    # Reconcile-path resolution: uses the repo_root string captured at
+    # registration time, threaded through the reconcile state.
+    spooled = git_reconcile.reconcile_repo(str(root))
+    assert spooled == 1
+    reconcile_events = _spool_events(config.git_spool_dir())
+    assert len(reconcile_events) == 1
+    reconcile_session_id = reconcile_events[0]["session_id"]
+
+    assert hook_session_id == reconcile_session_id
+    assert hook_session_id.startswith("git-")
