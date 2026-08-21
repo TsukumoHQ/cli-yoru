@@ -136,6 +136,11 @@ def test_pre_push_force_push_detected_and_spooled(tmp_path, monkeypatch):
     event = json.loads(files[0].read_text())
     assert event["force_push"] is True
     assert old_sha[:8] in event["content"] or new_sha[:8] in event["content"]
+    # Regression (found wiring B3 slice2.5's session agent-confidence
+    # rollup): an unset kind falls through the backend's
+    # _infer_kind(tool=None) to "tool_use", which then incorrectly bumps
+    # the session's tools_count for an event that never called a tool.
+    assert event["kind"] == "message"
 
 
 def test_pre_push_fast_forward_not_flagged(tmp_path, monkeypatch):

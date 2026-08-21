@@ -171,6 +171,15 @@ def _handle_pre_push(repo_root: str) -> int:
             continue
         event = dict(base)
         event["force_push"] = True
+        # Explicit, not left None: an unset `kind` falls through the
+        # backend's _infer_kind(tool=None) to "tool_use" (events_router.py),
+        # which then INCORRECTLY bumps the session's tools_count for an
+        # event that never called any tool (found while wiring session2.5's
+        # agent-confidence rollup). "message" is informational — the
+        # ingest kind/tool_use/file_change elif-chain has no special case
+        # for it, so it carries zero side effects, matching the original
+        # slice1 intent (this is metadata, not a tool call or file edit).
+        event["kind"] = "message"
         event["content"] = (
             f"force-push on {local_ref}: {remote_sha[:8]} -> {local_sha[:8]} "
             "(not a fast-forward)"
