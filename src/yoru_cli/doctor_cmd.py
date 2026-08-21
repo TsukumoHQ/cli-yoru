@@ -2,6 +2,7 @@
 
 Read-only check of the install:
   1. config.json present                   → else exit 1
+     (also prints the ACTIVE identity + warns if others exist unused — bdda7f06)
   2. backend /health/ready reachable       → else exit 2
   3. hook-token valid (GET /hook-tokens)   → else exit 3 on 401
   4. ~/.claude/hooks/yoru.sh is 0755    → else exit 4
@@ -55,6 +56,7 @@ def run(args: argparse.Namespace) -> int:  # noqa: ARG001 — argparse hands arg
     # leaves a visible trail of what DID work.
     identity_id = config.active_identity_id() or "?"
     print(f"✓ config at ~/.config/yoru/identities/{identity_id}/config.json (token {_token_suffix(token)})")
+    _print_identity_status(cfg, identity_id)
 
     # 2. backend /health/ready
     try:
@@ -110,6 +112,36 @@ def run(args: argparse.Namespace) -> int:  # noqa: ARG001 — argparse hands arg
     # messages showing up" has a place to look other than guessing.
     _print_tailer_status()
     return 0
+
+
+def _print_identity_status(cfg: dict, identity_id: str) -> None:
+    """Make the ACTIVE identity — the one the shared tailer attributes
+    every event to — impossible to miss (bdda7f06, anti-silent-mis-
+    attribution). On a machine with multiple paired identities, only one is
+    ever active; a second dev (or the same dev running two tasks
+    concurrently) under the SAME OS login has their work attributed to
+    whichever identity is active, not necessarily the one that ran it —
+    an inherent limit of a shared tailer (DEC-yoru-tailer-shared-ruling),
+    not a bug. Doctor's job here is to make that limit visible, never
+    silent — never to hide it or pretend it's solved."""
+    label = cfg.get("identity_label") or "(unlabeled)"
+    print(f"✓ identity: {label} ({identity_id}) — the shared tailer attributes activity to this identity")
+
+    identities = config.list_identities()
+    if len(identities) <= 1:
+        return
+    others = [
+        (i.get("identity_label") or "(unlabeled)", i.get("identity_id") or "?")
+        for i in identities
+        if i.get("identity_id") != identity_id
+    ]
+    other_desc = ", ".join(f"{lbl} ({iid})" for lbl, iid in others)
+    print(
+        f"⚠ {len(identities)} identities paired on this machine, only \"{label}\" is "
+        f"active — concurrent work under this same OS login attributes to the "
+        f"active identity regardless of who actually ran it. Switch first with "
+        f"`yoru use <label>`. Other paired identities: {other_desc}"
+    )
 
 
 def _print_tailer_status() -> None:

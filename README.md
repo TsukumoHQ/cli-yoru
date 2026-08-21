@@ -44,6 +44,15 @@ The installed script is ~20 lines of Bash that `POST`s one JSON event per Claude
 
 It uses `curl --max-time 2 || true` so a Yoru outage never stalls your terminal — Claude Code doesn't notice the hook is even there.
 
+## Multiple devs, multiple identities
+
+Each paired identity (server + token) gets its own local slot under `~/.config/yoru/identities/`. The shared tailer and every hook event attribute to whichever identity is **active** — there is no per-process attribution.
+
+- **One dev per machine (the normal case):** no ambiguity — one OS user, one identity, all activity is unambiguously yours.
+- **Same OS login, multiple identities paired** (e.g. you re-paired against a second org, or a shared machine): only one identity is active at a time. Concurrent work under that same login attributes to whichever identity is active *regardless of who actually ran it* — this is an explicit, documented limit, not a bug. Switch identities first with `yoru use <label>`.
+
+Run `yoru doctor` any time to see the active identity and get warned if other paired identities exist unused on this machine.
+
 ## Self-host the server
 
 The CLI is MIT. The server (backend + dashboard) is AGPL-3.0 and lives at **[github.com/TsukumoHQ/yoru](https://github.com/TsukumoHQ/yoru)**. `docker-compose up`, then `yoru init --server https://your-host` — done. There is no hosted Yoru; you run it.

@@ -124,3 +124,58 @@ def test_doctor_reports_tailer_running_with_recent_activity(monkeypatch, tmp_pat
     assert rc == 0
     assert "✓ tailer running" in out
     assert "last event" in out
+
+
+# ---------- Active identity visibility (bdda7f06) ----------
+
+def test_doctor_shows_active_identity_label_and_id(monkeypatch, tmp_path, capsys):
+    from yoru_cli import config, doctor_cmd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({
+        "identity_id": "id-alice",
+        "identity_label": "alice-laptop",
+        "server": "http://127.0.0.1:1",
+        "token": "rcpt_test_abcd",
+    })
+
+    doctor_cmd.run(_args())
+    out = capsys.readouterr().out
+    assert "✓ identity: alice-laptop (id-alice)" in out
+    assert "shared tailer attributes activity to this identity" in out
+
+
+def test_doctor_no_multi_identity_warning_with_single_identity(monkeypatch, tmp_path, capsys):
+    from yoru_cli import config, doctor_cmd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({
+        "identity_id": "id-alice", "identity_label": "alice-laptop",
+        "server": "http://127.0.0.1:1", "token": "rcpt_test_abcd",
+    })
+
+    doctor_cmd.run(_args())
+    out = capsys.readouterr().out
+    assert "paired on this machine" not in out
+
+
+def test_doctor_warns_on_multiple_paired_identities(monkeypatch, tmp_path, capsys):
+    from yoru_cli import config, doctor_cmd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({
+        "identity_id": "id-alice", "identity_label": "alice-laptop",
+        "server": "http://127.0.0.1:1", "token": "rcpt_test_abcd",
+    })
+    # A second, dormant identity — save_to_slot does NOT flip active.
+    config.save_to_slot("id-bob", {
+        "identity_id": "id-bob", "identity_label": "bob-desktop",
+        "server": "http://127.0.0.1:1", "token": "rcpt_test_other",
+    })
+    assert config.active_identity_id() == "id-alice"  # unchanged by the above
+
+    doctor_cmd.run(_args())
+    out = capsys.readouterr().out
+    assert "⚠ 2 identities paired on this machine, only \"alice-laptop\" is active" in out
+    assert "bob-desktop (id-bob)" in out
+    assert "yoru use <label>" in out
