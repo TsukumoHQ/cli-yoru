@@ -19,10 +19,17 @@ from .hook_template import HOOK_SCRIPT
 from .skill_template import SKILL_MD, SKILL_NAME
 
 
+def _hostname() -> str:
+    """Raw machine hostname — not user-overridable (unlike --label). Sent
+    separately so the server can populate CliToken.machine_hostname (the
+    identity model's structured device field) even when the user picks a
+    custom --label."""
+    return socket.gethostname().split(".")[0] or "unknown"
+
+
 def _default_label() -> str:
     """Best-effort human label for this machine — 'macbook-air · darwin'."""
-    host = socket.gethostname().split(".")[0] or "unknown"
-    return f"{host} · {platform.system().lower()}"
+    return f"{_hostname()} · {platform.system().lower()}"
 
 
 RECEIPT_MATCHERS: list[tuple[str, str]] = [
@@ -94,7 +101,7 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
     """Run the device-code pairing handshake — returns the raw token or None."""
     client = ReceiptClient(server)
     try:
-        start = client.start_device_code(label=label)
+        start = client.start_device_code(label=label, hostname=_hostname())
     except httpx.HTTPError as e:
         print(f"error: failed to contact {server}: {e}", file=sys.stderr)
         return None

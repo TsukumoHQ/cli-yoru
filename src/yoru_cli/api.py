@@ -10,11 +10,18 @@ class ReceiptClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
 
-    def start_device_code(self, label: str | None = None) -> dict[str, Any]:
+    def start_device_code(
+        self, label: str | None = None, hostname: str | None = None
+    ) -> dict[str, Any]:
         """Begin the device-pairing handshake — no auth needed."""
+        body: dict[str, Any] = {}
+        if label:
+            body["label"] = label
+        if hostname:
+            body["hostname"] = hostname
         r = httpx.post(
             f"{self.base_url}/api/v1/auth/device-code",
-            json={"label": label} if label else {},
+            json=body,
             timeout=5.0,
         )
         r.raise_for_status()

@@ -95,7 +95,7 @@ def _fake_pairing_client(poll_result: dict):
         def __init__(self, server: str) -> None:
             self.server = server
 
-        def start_device_code(self, label: str | None = None) -> dict:
+        def start_device_code(self, label: str | None = None, hostname: str | None = None) -> dict:
             return {
                 "user_code": "ABCD-EFGH",
                 "verification_uri": "http://fake/pair",
@@ -128,6 +128,36 @@ def test_init_device_pairs_when_no_token(monkeypatch, tmp_path):
     data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
     assert data["token"] == "rcpt_PAIRED"
     assert data["server"] == "http://fake"
+
+
+def test_init_device_pairing_sends_raw_hostname(monkeypatch, tmp_path):
+    # DEC-yoru-design-ruling-1 A.3#1 — the CLI must send the raw hostname
+    # (distinct from the user-overridable --label) so the server can
+    # populate CliToken.machine_hostname.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("YORU_TOKEN", raising=False)
+    from yoru_cli import init_cmd
+
+    captured: dict = {}
+    FakeClient = _fake_pairing_client({"status": "approved", "token": "rcpt_PAIRED"})
+    orig_start = FakeClient.start_device_code
+
+    def _spy_start(self, label=None, hostname=None):
+        captured["label"] = label
+        captured["hostname"] = hostname
+        return orig_start(self, label=label, hostname=hostname)
+
+    FakeClient.start_device_code = _spy_start
+    monkeypatch.setattr(init_cmd, "ReceiptClient", FakeClient)
+    monkeypatch.setattr("webbrowser.open", lambda *a, **k: True)
+
+    rc = init_cmd.run(_args(server="http://fake", token=None))
+    assert rc == 0
+    assert captured["hostname"] == init_cmd._hostname()
+    assert captured["hostname"]  # non-empty
+    assert captured["hostname"] not in (None, "")
+    # hostname is raw (no " · os" suffix), unlike the label
+    assert " · " not in captured["hostname"]
 
 
 def test_init_device_pairing_denied_returns_nonzero(monkeypatch, tmp_path):
