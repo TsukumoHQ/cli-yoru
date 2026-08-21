@@ -35,7 +35,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from . import config
+from . import config, git_reconcile
 
 _PROJECTS_DIR = Path.home() / ".claude/projects"
 # Identity-scoped (A.3#3): resolved from the ACTIVE identity's slot at
@@ -57,6 +57,10 @@ _DRAIN_CHUNK_SIZE = 1 << 20  # 1 MiB
 _RUN_LOCK_PATH = Path.home() / ".config/yoru/tailer.run.lock"
 _POLL_INTERVAL_SEC = 1.0
 _RESCAN_INTERVAL_SEC = 5.0
+# git-log reconciliation (B3 slice2) walks every registered repo's log —
+# far heavier per-call than a transcript rescan, so it runs on its own,
+# much longer cadence.
+_RECONCILE_INTERVAL_SEC = 60.0
 
 # Pricing is computed backend-side (see backend/apps/api/api/routers/receipt/
 # pricing.py which auto-refreshes from LiteLLM's public JSON). The tailer
@@ -623,10 +627,19 @@ def run() -> None:
         print(f"[tailer] purged {len(stale)} stale state entries", file=sys.stderr)
     state = _load_state()
     last_rescan = 0.0
+    last_reconcile = 0.0
     tracked: dict[str, Path] = {}  # abs-path-str → Path
     print(f"[tailer] server={server} watching {_PROJECTS_DIR}", file=sys.stderr)
     while True:
         now = time.time()
+        if now - last_reconcile > _RECONCILE_INTERVAL_SEC:
+            # B3 slice2 — git-log reconciliation: the audit-completeness
+            # filet for commits the post-commit hook missed (--no-verify,
+            # or a repo the hook was never installed in). A git-log walk
+            # per registered repo is far heavier than a poll tick, hence
+            # its own, much longer interval than the transcript rescan.
+            git_reconcile.reconcile_all()
+            last_reconcile = now
         if now - last_rescan > _RESCAN_INTERVAL_SEC:
             if _PROJECTS_DIR.is_dir():
                 for p in _PROJECTS_DIR.glob("**/*.jsonl"):

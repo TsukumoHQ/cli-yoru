@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, git_hooks
+from . import config, git_hooks, git_reconcile
 from .api import ReceiptClient
 from .hook_template import HOOK_SCRIPT
 from .skill_template import SKILL_MD, SKILL_NAME
@@ -296,6 +296,12 @@ def run(args: argparse.Namespace) -> int:
         installed = git_hooks.install_git_hooks(root)
         if installed:
             print(f"\u2713 git hooks \u2192 {root} ({', '.join(installed)}) \u2014 commits captured even if no agent runs here")
+        # Registers for git-log reconciliation (B3 slice2) regardless of
+        # whether hook install actually happened this run \u2014 reconciliation
+        # is a fully independent capture path, so it's the audit-safe floor
+        # even for a repo whose hook files can't be written or get removed
+        # later.
+        git_reconcile.register_repo(str(root))
 
     print("Next: run Claude Code normally; first event streams to /sessions/events.")
     return 0

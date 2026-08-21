@@ -267,3 +267,31 @@ def ensure_git_spool_dir() -> Path:
     d = git_spool_dir()
     _ensure_private_dir(d)
     return d
+
+
+def git_repos_path() -> Path:
+    """~/.config/yoru/identities/<active>/git-repos.json — the registry of
+    repos `yoru init` has paired for the independent git capture floor
+    (B3 slice2, trovex:4e85331d §D). `install_git_hooks`'s caller registers
+    a repo here at pairing time; the reconciliation walk (`git_reconcile.py`)
+    reads this list to know which repos to `git log`-walk. Deliberately a
+    flat JSON array, not derived from the hooks on disk — a repo stays
+    registered for reconciliation even if its hook files are later removed
+    by the user, since reconciliation is a fully independent capture path
+    (it doesn't need the hook to have ever fired)."""
+    identity_id = active_identity_id()
+    if identity_id is None:
+        return _root_dir() / "git-repos.json"
+    return _slot_dir(identity_id) / "git-repos.json"
+
+
+def git_reconcile_state_path() -> Path:
+    """~/.config/yoru/identities/<active>/git-reconcile-state.json — the
+    per-repo last-seen-commit-SHA the git-log reconciliation walk backfills
+    from (B3 slice2). Separate file from `tail_state_path()`: unrelated
+    concern (repo SHA vs transcript byte offset), same reasoning as
+    `tail_metrics_path()` keeping metrics apart from tail-state."""
+    identity_id = active_identity_id()
+    if identity_id is None:
+        return _root_dir() / "git-reconcile-state.json"
+    return _slot_dir(identity_id) / "git-reconcile-state.json"

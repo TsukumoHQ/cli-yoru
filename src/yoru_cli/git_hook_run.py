@@ -1,5 +1,5 @@
-"""`python3 -m yoru_cli.git_hook_run <post-commit|pre-push>` — the process a
-paired repo's git hooks (see `git_hooks.py`) shell out to.
+"""`yoru git-hook-run <post-commit|pre-push>` — the process a paired repo's
+git hooks (see `git_hooks.py`) shell out to.
 
 Thin by construction (review-cli-tool §1 / ruling D6.3): this module never
 makes a network call. It resolves the active identity, builds one
@@ -105,12 +105,18 @@ def _base_event(repo_root: str) -> dict[str, Any] | None:
     return event
 
 
-def _handle_post_commit(sha: str, repo_root: str) -> int:
-    if os.environ.get("AGENT_RELAY_CHILD") == "1":
-        return 0
+def build_commit_event(sha: str, repo_root: str) -> dict[str, Any] | None:
+    """Builds one commit's CanonicalEvent-shaped body from local `git` state.
+    Shared by the post-commit hook (fast path) and `git_reconcile.py`'s
+    git-log backfill (the audit-completeness filet for commits the hook
+    never saw — `--no-verify`, or a repo where the hook was never
+    installed) — both paths must produce byte-identical `entry_uuid`s for
+    the same commit so the backend's existing (session_id, entry_uuid)
+    dedup collapses a commit captured by BOTH paths into one event, not
+    two (B3 slice2 AC #2)."""
     event = _base_event(repo_root)
     if event is None:
-        return 0
+        return None
     message = _run_git(["log", "-1", "--format=%B", sha], repo_root) or ""
     stat = _run_git(["show", "--stat", "--format=", sha], repo_root)
     diff = _run_git(["show", "--format=", "--no-color", sha], repo_root)
@@ -121,6 +127,16 @@ def _handle_post_commit(sha: str, repo_root: str) -> int:
     event["content"] = _cap(message.strip()) if message else None
     event["diff_unified"] = _cap(diff)
     event["diff_stat"] = _cap(stat, limit=_MAX_STAT_CHARS)
+    event["entry_uuid"] = f"git-commit-{sha}"
+    return event
+
+
+def _handle_post_commit(sha: str, repo_root: str) -> int:
+    if os.environ.get("AGENT_RELAY_CHILD") == "1":
+        return 0
+    event = build_commit_event(sha, repo_root)
+    if event is None:
+        return 0
     _spool(event)
     return 0
 
