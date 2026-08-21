@@ -14,6 +14,16 @@ def _args(
     return argparse.Namespace(cmd="init", server=server, token=token, force=force, user=user)
 
 
+def _active_config_path():
+    """The active identity's config.json — identity-scoped (A.3#3), so
+    there is no fixed flat path to hardcode any more."""
+    from yoru_cli import config
+
+    identity_id = config.active_identity_id()
+    assert identity_id is not None
+    return config._slot_config_file(identity_id)
+
+
 def test_init_writes_config_and_hook(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     from yoru_cli import config, init_cmd
@@ -23,7 +33,7 @@ def test_init_writes_config_and_hook(monkeypatch, tmp_path):
     rc = init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
     assert rc == 0
 
-    cfg_path = tmp_path / ".config" / "yoru" / "config.json"
+    cfg_path = _active_config_path()
     assert cfg_path.is_file()
     assert stat.S_IMODE(cfg_path.stat().st_mode) == 0o600
     data = json.loads(cfg_path.read_text())
@@ -106,7 +116,7 @@ def test_init_with_force_overwrites(monkeypatch, tmp_path):
     init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
     rc = init_cmd.run(_args(server="http://fake", token="rcpt_XYZ", force=True))
     assert rc == 0
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = json.loads(_active_config_path().read_text())
     assert data["token"] == "rcpt_XYZ"
 
 
@@ -191,7 +201,7 @@ def test_init_force_revoke_failure_does_not_block_init(monkeypatch, tmp_path, ca
 
     assert rc == 0
     assert len(calls) == 1
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = json.loads(_active_config_path().read_text())
     assert data["token"] == "rcpt_XYZ"
     err = capsys.readouterr().err
     assert "could not revoke" in err.lower()
@@ -234,7 +244,7 @@ def test_init_force_recovers_from_corrupt_config(monkeypatch, tmp_path) -> None:
 
     assert rc == 0
     assert calls == []  # nothing to revoke — no crash, no bogus revoke attempt
-    data = json.loads(cfg_path.read_text())
+    data = json.loads(_active_config_path().read_text())
     assert data["token"] == "rcpt_NEW"
 
 
@@ -275,7 +285,7 @@ def test_init_device_pairs_when_no_token(monkeypatch, tmp_path):
 
     rc = init_cmd.run(_args(server="http://fake", token=None))
     assert rc == 0
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = json.loads(_active_config_path().read_text())
     assert data["token"] == "rcpt_PAIRED"
     assert data["server"] == "http://fake"
 

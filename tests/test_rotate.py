@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 
 
 def _args(token: str | None = None, label: str | None = None, no_browser: bool = True) -> argparse.Namespace:
@@ -70,7 +69,7 @@ def test_rotate_with_token_revokes_old_and_saves_new(monkeypatch, tmp_path):
     assert rc == 0
     assert len(calls["logout"]) == 1
     assert calls["logout"][0]["token"] == "rcpt_OLD"
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = config.load()
     assert data["token"] == "rcpt_XYZ"
     assert data["server"] == "http://fake"
 
@@ -88,7 +87,7 @@ def test_rotate_via_pairing_revokes_old_and_saves_new(monkeypatch, tmp_path):
     assert rc == 0
     assert len(calls["logout"]) == 1
     assert calls["logout"][0]["token"] == "rcpt_OLD"
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = config.load()
     assert data["token"] == "rcpt_PAIRED"
 
 
@@ -104,7 +103,7 @@ def test_rotate_pairing_failure_leaves_old_config_and_skips_revoke(monkeypatch, 
 
     assert rc == 2
     assert calls["logout"] == []  # never got a new token — old one stays live
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = config.load()
     assert data["token"] == "rcpt_OLD"
 
 
@@ -122,6 +121,6 @@ def test_rotate_revoke_failure_does_not_block_save(monkeypatch, tmp_path, capsys
 
     assert rc == 0
     assert len(calls["logout"]) == 1
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = config.load()
     assert data["token"] == "rcpt_XYZ"
     assert "could not revoke" in capsys.readouterr().err.lower()

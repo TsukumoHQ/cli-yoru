@@ -40,9 +40,14 @@ def run(args: argparse.Namespace) -> int:
     if not new_token:
         label = (getattr(args, "label", None) or "").strip() or _default_label()
         no_browser = bool(getattr(args, "no_browser", False))
-        new_token = _pair_device(server, label, no_browser=no_browser)
-        if not new_token:
+        paired = _pair_device(server, label, no_browser=no_browser)
+        if not paired:
             return 2
+        # Rotate keeps the SAME local identity slot (tail-state, enforce
+        # marker) — it's a refreshed credential for the same device, not a
+        # new identity. The fresh CliToken.id the pairing minted is only
+        # used server-side; discard it here on purpose.
+        new_token, _new_identity_id = paired
 
     if old_token:
         try:
@@ -59,9 +64,12 @@ def run(args: argparse.Namespace) -> int:
             else:
                 print("· previous token was already revoked/invalid", file=sys.stderr)
 
+    identity_id = cfg.get("identity_id") or config.active_identity_id() or config.synthesize_identity_id(new_token)
     config.save({
+        **cfg,
+        "identity_id": identity_id,
         "server": server,
         "token": new_token,
     })
-    print("✓ rotated — new token saved to ~/.config/yoru/config.json")
+    print("✓ rotated — new token saved to the active identity's config.json")
     return 0

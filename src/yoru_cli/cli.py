@@ -13,6 +13,7 @@ from . import (
     share_cmd,
     tail_cmd,
     update_cmd,
+    use_cmd,
     verify_export_cmd,
 )
 
@@ -31,12 +32,12 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="cmd",
         required=True,
-        metavar="{init,logout,rotate,tail,doctor,share,update,verify-export,enforce}",
+        metavar="{init,use,logout,rotate,tail,doctor,share,update,verify-export,enforce}",
     )
 
     p_init = subparsers.add_parser(
         "init",
-        help="Install the Claude Code hook and write ~/.config/yoru/config.json.",
+        help="Install the Claude Code hook and pair a local identity under ~/.config/yoru/.",
     )
     p_init.add_argument(
         "--server",
@@ -63,6 +64,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Don't try to auto-open the pairing URL in a browser.",
     )
     p_init.add_argument("--force", action="store_true", help="Overwrite an existing install.")
+
+    p_use = subparsers.add_parser(
+        "use",
+        help="Switch the active paired identity (no arg: list paired identities).",
+    )
+    p_use.add_argument(
+        "label",
+        nargs="?",
+        default=None,
+        help="identity_label (or identity_id) to switch to. Omit to list.",
+    )
 
     subparsers.add_parser(
         "logout",
@@ -201,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "init":
         return init_cmd.run(args)
+    if args.cmd == "use":
+        return use_cmd.run(args)
     if args.cmd == "logout":
         return logout_cmd.run(args)
     if args.cmd == "rotate":

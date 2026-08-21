@@ -69,8 +69,8 @@ def _run_check(monkeypatch, capsys, payload, *, enabled):
     else:
         monkeypatch.delenv("YORU_ENFORCE", raising=False)
         # Also ensure no policy marker is seen.
-        monkeypatch.setattr(enforce_cmd, "_POLICY_MARKER",
-                            __import__("pathlib").Path("/nonexistent/enforce.json"))
+        monkeypatch.setattr(enforce_cmd, "_policy_marker",
+                            lambda: __import__("pathlib").Path("/nonexistent/enforce.json"))
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     rc = enforce_cmd.check()
     return rc, capsys.readouterr().out
@@ -127,8 +127,7 @@ def test_malformed_stdin_fails_open(monkeypatch, capsys):
 def _paths(monkeypatch, tmp_path):
     cfg = tmp_path / "config" / "yoru"
     claude = tmp_path / "claude"
-    monkeypatch.setattr(enforce_cmd, "_CONFIG_DIR", cfg)
-    monkeypatch.setattr(enforce_cmd, "_POLICY_MARKER", cfg / "enforce.json")
+    monkeypatch.setattr(enforce_cmd, "_policy_marker", lambda: cfg / "enforce.json")
     monkeypatch.setattr(enforce_cmd, "_HOOK_PATH", claude / "hooks" / "yoru-enforce.sh")
     monkeypatch.setattr(enforce_cmd, "_SETTINGS_PATH", claude / "settings.json")
     return cfg, claude
@@ -230,3 +229,19 @@ def test_disable_keeps_a_co_located_pretooluse_entry(_paths, monkeypatch):
     cmds = [e["hooks"][0]["command"] for e in pre]
     assert "/home/u/my-guard.sh" in cmds
     assert not any(c.endswith("yoru-enforce.sh") for c in cmds)
+
+
+def test_policy_marker_follows_active_identity_slot(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("YORU_ENFORCE", raising=False)
+    from yoru_cli import config
+
+    config.save({"identity_id": "id-1", "server": "http://a", "token": "rcpt_A"})
+    assert enforce_cmd.enable() == 0
+    assert (tmp_path / ".config" / "yoru" / "identities" / "id-1" / "enforce.json").is_file()
+    assert enforce_cmd.enforcement_enabled() is True
+
+    config.save({"identity_id": "id-2", "server": "http://b", "token": "rcpt_B"})
+    # Switching the active identity mid-process must be picked up on the
+    # NEXT check — enforce.json is per-identity, id-2's slot has none yet.
+    assert enforce_cmd.enforcement_enabled() is False

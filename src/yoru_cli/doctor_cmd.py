@@ -45,7 +45,8 @@ def run(args: argparse.Namespace) -> int:  # noqa: ARG001 — argparse hands arg
         return 1
     # Each stage prints its check the moment it passes, so a later failure
     # leaves a visible trail of what DID work.
-    print(f"✓ config at ~/.config/yoru/config.json (token {_token_suffix(token)})")
+    identity_id = config.active_identity_id() or "?"
+    print(f"✓ config at ~/.config/yoru/identities/{identity_id}/config.json (token {_token_suffix(token)})")
 
     # 2. backend /health/ready
     try:

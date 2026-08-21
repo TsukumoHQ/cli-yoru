@@ -97,8 +97,11 @@ def _merge_settings_json(settings_path: Path, hook_path: Path) -> None:
     os.replace(tmp, settings_path)
 
 
-def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
-    """Run the device-code pairing handshake — returns the raw token or None."""
+def _pair_device(server: str, label: str, *, no_browser: bool) -> tuple[str, str | None] | None:
+    """Run the device-code pairing handshake — returns (token, identity_id)
+    or None. `identity_id` is the server-issued CliToken.id (identity slot
+    key, A.3#3) — None only against an older server that doesn't send it
+    yet, in which case the caller falls back to `synthesize_identity_id`."""
     client = ReceiptClient(server)
     try:
         start = client.start_device_code(label=label, hostname=_hostname())
@@ -138,7 +141,7 @@ def _pair_device(server: str, label: str, *, no_browser: bool) -> str | None:
                 print("error: approved but no token returned", file=sys.stderr)
                 return None
             print(f"  ✓ Paired as {label}")
-            return token
+            return token, resp.get("identity_id")
         if s in ("expired", "denied"):
             print(f"\nerror: pairing {s} — re-run `yoru init`", file=sys.stderr)
             return None
@@ -251,17 +254,28 @@ def run(args: argparse.Namespace) -> int:
     if not token:
         token = os.environ.get("YORU_TOKEN", "").strip() or None
 
+    label = (getattr(args, "label", None) or "").strip() or _default_label()
+    identity_id: str | None = None
+
     if not token:
-        label = (getattr(args, "label", None) or "").strip() or _default_label()
         no_browser = bool(getattr(args, "no_browser", False))
-        token = _pair_device(server, label, no_browser=no_browser)
-        if not token:
+        paired = _pair_device(server, label, no_browser=no_browser)
+        if not paired:
             return 2
+        token, identity_id = paired
+
+    # --token/$YORU_TOKEN never round-trips a server-issued id — key the
+    # local slot off the token itself (DEC-yoru-design-ruling-1 Q1: never
+    # hash(server_url, user_email), that collides across re-pairs).
+    if not identity_id:
+        identity_id = config.synthesize_identity_id(token)
 
     if old_config:
         _revoke_previous_pairing(old_config, token)
 
     config.save({
+        "identity_id": identity_id,
+        "identity_label": label,
         "server": server,
         "token": token,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -269,7 +283,7 @@ def run(args: argparse.Namespace) -> int:
 
     refresh_hook_assets()
 
-    print("\u2713 config   \u2192 ~/.config/yoru/config.json")
+    print(f"\u2713 config   \u2192 ~/.config/yoru/identities/{identity_id}/config.json")
     print("\u2713 hook     \u2192 ~/.claude/hooks/yoru.sh")
     print("\u2713 settings \u2192 ~/.claude/settings.json (hook registered)")
     print("\u2713 skill    \u2192 ~/.claude/skills/yoru/SKILL.md (Claude can drive setup + usage)")

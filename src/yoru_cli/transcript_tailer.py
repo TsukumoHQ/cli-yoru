@@ -35,10 +35,19 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from . import config
+
 _PROJECTS_DIR = Path.home() / ".claude/projects"
-_CONFIG_PATH = Path.home() / ".config/yoru/config.json"
-_STATE_PATH = Path.home() / ".config/yoru/tail-state.json"
-_STATE_LOCK_PATH = Path.home() / ".config/yoru/tail-state.json.lock"
+# Identity-scoped (A.3#3): resolved from the ACTIVE identity's slot at
+# import time. Only one identity is ever active, so one shared tailer
+# resolving it at startup is correct — switching via `yoru use` takes
+# effect on the tailer's NEXT start, not live (restart-to-switch).
+_STATE_PATH = config.tail_state_path()
+_STATE_LOCK_PATH = _STATE_PATH.with_name(_STATE_PATH.name + ".lock")
+# NOT identity-scoped, deliberately: this guards against two tailer
+# PROCESSES on the same $HOME regardless of which identity either has
+# active — transcripts are machine-wide, not per-identity, so only one
+# tailer should ever run at a time no matter how many identities exist.
 _RUN_LOCK_PATH = Path.home() / ".config/yoru/tailer.run.lock"
 _POLL_INTERVAL_SEC = 1.0
 _RESCAN_INTERVAL_SEC = 5.0
@@ -51,8 +60,9 @@ _RESCAN_INTERVAL_SEC = 5.0
 
 
 def _load_config() -> tuple[str, str]:
-    with open(_CONFIG_PATH) as f:
-        cfg = json.load(f)
+    cfg = config.load()
+    if cfg is None:
+        raise FileNotFoundError("no active yoru identity — run `yoru init` first")
     return cfg["server"].rstrip("/"), cfg["token"]
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 
 
 def _args() -> argparse.Namespace:
@@ -82,6 +81,6 @@ def test_logout_network_failure_keeps_local_config(monkeypatch, tmp_path, capsys
     # is still (as far as we know) logged in; don't discard state on a
     # network hiccup.
     assert config.exists() is True
-    data = json.loads((tmp_path / ".config" / "yoru" / "config.json").read_text())
+    data = config.load()
     assert data["token"] == "rcpt_ABC"
     assert "could not revoke" in capsys.readouterr().err.lower()

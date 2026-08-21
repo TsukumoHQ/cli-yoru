@@ -23,13 +23,18 @@ import os
 import sys
 from pathlib import Path
 
-from . import enforce_policy
+from . import config, enforce_policy
 from .enforce_template import ENFORCE_HOOK_SCRIPT
 
-_CONFIG_DIR = Path.home() / ".config" / "yoru"
-_POLICY_MARKER = _CONFIG_DIR / "enforce.json"  # presence = opt-in enabled
 _HOOK_PATH = Path.home() / ".claude" / "hooks" / "yoru-enforce.sh"
 _SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+
+
+def _policy_marker() -> Path:
+    """enforce.json lives in the ACTIVE identity's slot (A.3#3) — resolved
+    fresh on every call, never cached, so `yoru use` switching the active
+    identity mid-session is picked up immediately."""
+    return config.enforce_marker_path()
 
 
 def enforcement_enabled() -> bool:
@@ -37,7 +42,7 @@ def enforcement_enabled() -> bool:
     Default (neither) = OFF."""
     if os.environ.get("YORU_ENFORCE", "").strip().lower() in ("1", "yes", "true", "on"):
         return True
-    return _POLICY_MARKER.exists()
+    return _policy_marker().exists()
 
 
 # ── the hidden decision the PreToolUse hook invokes ─────────────────────────
@@ -166,8 +171,9 @@ def _unregister_hook() -> None:
 
 
 def enable() -> int:
-    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _POLICY_MARKER.write_text(
+    marker = _policy_marker()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
         json.dumps({"enabled": True, "rules": "builtin"}, indent=2),
         encoding="utf-8",
     )
@@ -185,9 +191,10 @@ def disable() -> int:
     # remove its script, so a disabled gate stops spawning bash/python on every
     # tool call (and `status` no longer reports a lingering hook). Symmetric with
     # enable(); the passive audit streamer is never touched.
-    existed = _POLICY_MARKER.exists() or _HOOK_PATH.exists()
-    if _POLICY_MARKER.exists():
-        _POLICY_MARKER.unlink()
+    marker = _policy_marker()
+    existed = marker.exists() or _HOOK_PATH.exists()
+    if marker.exists():
+        marker.unlink()
     _unregister_hook()
     if _HOOK_PATH.exists():
         _HOOK_PATH.unlink()
@@ -201,7 +208,7 @@ def status() -> int:
     on = enforcement_enabled()
     src = (
         "YORU_ENFORCE env" if os.environ.get("YORU_ENFORCE", "").strip()
-        else ("policy marker" if _POLICY_MARKER.exists() else "off")
+        else ("policy marker" if _policy_marker().exists() else "off")
     )
     print(f"enforcement: {'ON' if on else 'OFF'} ({src})")
     print(f"hook script: {'present' if _HOOK_PATH.exists() else 'not installed'}")

@@ -86,7 +86,7 @@ yoru init --server <THEIR_SERVER_URL>
 ```
 
 `--server` is required. `yoru init`:
-- writes `~/.config/yoru/config.json` (server + a paired device token),
+- writes `~/.config/yoru/identities/<id>/config.json` (server + a paired device token; `yoru use` switches between multiple paired identities on the same machine),
 - writes the hook to `~/.claude/hooks/yoru.sh`,
 - registers it in `~/.claude/settings.json` (PostToolUse / SessionStart / Stop).
 

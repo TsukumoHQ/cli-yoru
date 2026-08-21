@@ -21,10 +21,21 @@ HOOK_SCRIPT: str = """#!/usr/bin/env bash
 set -euo pipefail
 # Skip events when AGENT_RELAY_CHILD=1 (agent-relay-spawned children — prevents dashboard noise)
 [ "${AGENT_RELAY_CHILD:-0}" = "1" ] && exit 0
-CFG="${HOME}/.config/yoru/config.json"
+# Identity-scoped config (A.3#3): config.json lives under the ACTIVE
+# identity's slot, keyed by ~/.config/yoru/active. Falls back to the flat
+# pre-A.3#3 path when `active` doesn't exist yet (not migrated) — the CLI's
+# Python side migrates it lazily on its own next invocation; this hook
+# never writes state, only reads whichever config is currently live.
+ROOT="${HOME}/.config/yoru"
+if [ -r "${ROOT}/active" ]; then
+  IDENTITY=$(cat "${ROOT}/active")
+  CFG="${ROOT}/identities/${IDENTITY}/config.json"
+else
+  CFG="${ROOT}/config.json"
+fi
 [ -r "$CFG" ] || exit 0          # silent no-op if uninstalled
-SERVER=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/yoru/config.json")))["server"])')
-TOKEN=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/yoru/config.json")))["token"])')
+SERVER=$(python3 -c "import json;print(json.load(open('${CFG}'))['server'])")
+TOKEN=$(python3 -c "import json;print(json.load(open('${CFG}'))['token'])")
 # Claude Code pipes the hook event as JSON on stdin. We parse the original
 # payload, attach it verbatim to `raw` (so the backend sees tool_input /
 # tool_response — Pydantic drops unknown top-level fields otherwise), then

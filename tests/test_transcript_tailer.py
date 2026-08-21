@@ -120,3 +120,20 @@ def test_state_txn_no_lost_updates_under_thread_concurrency(
     assert len(final) == n_threads
     for idx in range(n_threads):
         assert final[f"session-{idx}.jsonl"] == n_writes - 1
+
+
+def test_load_config_resolves_from_active_identity_slot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import config
+
+    config.save({"identity_id": "id-1", "server": "http://a", "token": "rcpt_A"})
+    assert tt._load_config() == ("http://a", "rcpt_A")
+
+    config.save({"identity_id": "id-2", "server": "http://b", "token": "rcpt_B"})
+    assert tt._load_config() == ("http://b", "rcpt_B")
+
+
+def test_load_config_raises_when_no_active_identity(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        tt._load_config()
