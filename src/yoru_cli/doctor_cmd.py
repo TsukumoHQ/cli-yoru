@@ -69,7 +69,11 @@ def run(args: argparse.Namespace) -> int:  # noqa: ARG001 — argparse hands arg
         print(f"backend unreachable at {server}", file=sys.stderr)
         return 2
     if r.status_code == 401:
-        print("token revoked or expired", file=sys.stderr)
+        print(
+            "token revoked or expired — run `yoru rotate` to replace it "
+            "(keeps the same server/identity)",
+            file=sys.stderr,
+        )
         return 3
     if r.status_code != 200:
         print(

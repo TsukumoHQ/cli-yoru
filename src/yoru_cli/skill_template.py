@@ -105,7 +105,7 @@ installed). If a stage fails, the line just before the error tells you what
 already worked — fix that stage:
 - *yoru init not run* → run step 3.
 - *backend unreachable* → is the server URL right and the backend up?
-- *token revoked or expired* → re-run `yoru init --force`.
+- *token revoked or expired* → run `yoru rotate` (keeps the same server/identity; `yoru init --force` re-pairs from scratch and needs --server again).
 - *hook file missing* → re-run `yoru init` (or `yoru update`).
 
 ## 5. Record a session

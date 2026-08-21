@@ -8,6 +8,8 @@ from . import (
     doctor_cmd,
     enforce_cmd,
     init_cmd,
+    logout_cmd,
+    rotate_cmd,
     share_cmd,
     tail_cmd,
     update_cmd,
@@ -29,7 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="cmd",
         required=True,
-        metavar="{init,tail,doctor,share,update,verify-export,enforce}",
+        metavar="{init,logout,rotate,tail,doctor,share,update,verify-export,enforce}",
     )
 
     p_init = subparsers.add_parser(
@@ -61,6 +63,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Don't try to auto-open the pairing URL in a browser.",
     )
     p_init.add_argument("--force", action="store_true", help="Overwrite an existing install.")
+
+    subparsers.add_parser(
+        "logout",
+        help="Revoke the current token server-side and forget it locally.",
+    )
+
+    p_rotate = subparsers.add_parser(
+        "rotate",
+        help="Replace the current token with a new one, revoking the old "
+        "one server-side (same server as the existing pairing).",
+    )
+    p_rotate.add_argument(
+        "--token",
+        default=None,
+        help="Pre-minted replacement token — for headless/CI/server setups. "
+             "Also read from $YORU_TOKEN. Without this, yoru rotate launches "
+             "interactive device pairing.",
+    )
+    p_rotate.add_argument(
+        "--label",
+        default=None,
+        help="Human-readable machine label for the new pairing "
+             "(default: <hostname> · <os>).",
+    )
+    p_rotate.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Don't try to auto-open the pairing URL in a browser.",
+    )
 
     p_tail = subparsers.add_parser(
         "tail",
@@ -170,6 +201,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "init":
         return init_cmd.run(args)
+    if args.cmd == "logout":
+        return logout_cmd.run(args)
+    if args.cmd == "rotate":
+        return rotate_cmd.run(args)
     if args.cmd == "tail":
         return tail_cmd.run(args)
     if args.cmd == "doctor":

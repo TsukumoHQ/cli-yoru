@@ -41,3 +41,8 @@ def save(data: dict[str, Any]) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
         f.write("\n")
+
+
+def remove() -> None:
+    """Delete config.json (used by `yoru logout`). No-op if already gone."""
+    _config_file().unlink(missing_ok=True)

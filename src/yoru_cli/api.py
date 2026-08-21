@@ -76,6 +76,29 @@ class ReceiptClient:
         r.raise_for_status()
         return r.json()
 
+    def logout(self) -> bool:
+        """Revoke this client's own token server-side (POST /auth/logout).
+
+        Self-revoke via bearer — no need to know the token's server-side row
+        id, which the CLI never learns (the poll response only ever returns
+        the raw token). Returns True if the token was revoked, False if it
+        was already invalid/revoked (a 401 here just means "nothing to
+        revoke", not a failure worth surfacing). Any other error status or
+        network failure raises, so the caller can warn loudly instead of
+        silently treating a failed revoke as done.
+        """
+        if not self.token:
+            raise RuntimeError("logout requires authentication")
+        r = httpx.post(
+            f"{self.base_url}/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=5.0,
+        )
+        if r.status_code == 401:
+            return False
+        r.raise_for_status()
+        return True
+
     def get_share_consent(self) -> dict[str, Any]:
         """Returns {consented: bool, at: str|None} for the authenticated user."""
         if not self.token:

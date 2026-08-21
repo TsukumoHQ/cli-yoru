@@ -32,3 +32,34 @@ def test_doctor_prints_passed_stages_before_a_failure(monkeypatch, tmp_path, cap
     assert rc == 2  # failed at the backend stage
     assert "✓ config" in out.out  # but the passed stage was reported first
     assert "backend unreachable" in out.err
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+def test_doctor_revoked_token_points_to_rotate_not_init_force(monkeypatch, tmp_path, capsys):
+    # DEC-yoru-design-ruling-1 A.3#5 — doctor must guide toward `yoru rotate`
+    # (same identity, no --server needed), never `init --force` (re-pairs
+    # from scratch), on a revoked/expired token.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import config, doctor_cmd
+
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+
+    def fake_get(url: str, **kwargs):
+        if url.endswith("/health/ready"):
+            return _FakeResponse(200)
+        if url.endswith("/auth/hook-tokens"):
+            return _FakeResponse(401)
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr(doctor_cmd.httpx, "get", fake_get)
+
+    rc = doctor_cmd.run(_args())
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "yoru rotate" in err
+    assert "init --force" not in err
