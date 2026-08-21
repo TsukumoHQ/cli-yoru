@@ -30,7 +30,17 @@ Issues = "https://github.com/TsukumoHQ/cli-yoru/issues"
 yoru = "yoru_cli.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+# yoru-contract is dev-only for now: nothing in yoru-cli imports it yet (the
+# CLI-side consumption ticket is a separate follow-up), and it isn't
+# published to PyPI or vendored into the wheel — a hard runtime dependency
+# here would break `pip install yoru-cli` with "No matching distribution
+# found for yoru-contract". Once the CLI actually consumes it, the release
+# mirror step needs to vendor its source into the wheel (or publish it
+# separately) before this can become a real dependency.
+dev = ["pytest>=7", "yoru-contract"]
+
+[tool.uv.sources]
+yoru-contract = { path = "../packages/yoru-contract" }
 
 [build-system]
 requires = ["hatchling"]
