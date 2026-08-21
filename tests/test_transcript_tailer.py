@@ -491,3 +491,75 @@ def test_drain_git_spool_noop_when_dir_absent(tmp_path: Path, monkeypatch) -> No
 
     monkeypatch.setattr(tt, "_post", _fail_if_called)
     tt._drain_git_spool("http://fake", "rcpt_test_abcd")  # no raise
+
+
+# ---------- _rescan_new_transcripts vs a concurrent backfill() (c7c6c5f7) ----------
+
+def _patch_projects_and_state(tmp_path: Path, monkeypatch):
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    monkeypatch.setattr(tt, "_PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(tt, "_STATE_PATH", tmp_path / "tail-state.json")
+    monkeypatch.setattr(tt, "_STATE_LOCK_PATH", tmp_path / "tail-state.json.lock")
+    return projects_dir
+
+
+def test_rescan_seeks_to_end_when_nothing_seeded_on_disk(tmp_path: Path, monkeypatch) -> None:
+    projects_dir = _patch_projects_and_state(tmp_path, monkeypatch)
+    transcript = projects_dir / "s1.jsonl"
+    transcript.write_text('{"a":1}\n{"b":2}\n')
+
+    state: dict[str, int] = {}
+    tracked: dict[str, Path] = {}
+    tt._rescan_new_transcripts(state, tracked)
+
+    assert state[str(transcript)] == transcript.stat().st_size
+    assert str(transcript) in tracked
+
+
+def test_rescan_honors_a_concurrent_backfill_seed_instead_of_seeking_to_end(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The AC's exact scenario: backfill() writes an offset for a path
+    run() hasn't discovered yet (not in its startup in-memory `state`).
+    When run()'s rescan discovers that path, it must NOT seek-to-end past
+    the offset backfill already established — every event between that
+    offset and end-of-file would otherwise be silently skipped forever."""
+    projects_dir = _patch_projects_and_state(tmp_path, monkeypatch)
+    transcript = projects_dir / "s1.jsonl"
+    transcript.write_text('{"a":1}\n{"b":2}\n{"c":3}\n')
+    backfill_offset = 5  # partway through the file — NOT end-of-file
+
+    # backfill() writes this the same way run() itself would: a locked txn.
+    with tt._state_txn() as disk_state:
+        disk_state[str(transcript)] = backfill_offset
+
+    # run()'s startup snapshot predates backfill's write — the in-memory
+    # `state`/`tracked` know nothing about this path yet.
+    state: dict[str, int] = {}
+    tracked: dict[str, Path] = {}
+    tt._rescan_new_transcripts(state, tracked)
+
+    assert state[str(transcript)] == backfill_offset  # NOT transcript.stat().st_size
+    assert str(transcript) in tracked
+
+
+def test_rescan_never_overwrites_an_already_tracked_in_memory_offset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A key already present in the in-memory `state` (this process's own
+    prior progress) must win over whatever a stale on-disk snapshot has —
+    the merge only fills in keys `state` doesn't have yet."""
+    projects_dir = _patch_projects_and_state(tmp_path, monkeypatch)
+    transcript = projects_dir / "s1.jsonl"
+    transcript.write_text('{"a":1}\n{"b":2}\n{"c":3}\n')
+
+    with tt._state_txn() as disk_state:
+        disk_state[str(transcript)] = 0  # stale/irrelevant on-disk value
+
+    state: dict[str, int] = {str(transcript): 999}  # our own live progress
+    tracked: dict[str, Path] = {}  # not yet tracked, so it's a "new path" this tick
+    tt._rescan_new_transcripts(state, tracked)
+
+    assert state[str(transcript)] == 999  # untouched by the on-disk merge
+    assert str(transcript) in tracked

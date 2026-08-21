@@ -602,6 +602,42 @@ def _drain_file(
             _record_post_error()
 
 
+def _rescan_new_transcripts(state: dict[str, int], tracked: dict[str, Path]) -> None:
+    """Discovers transcripts under `_PROJECTS_DIR` not yet in `tracked`, and
+    decides each one's starting offset — seek-to-end (audit-safe: never
+    backfill old messages a CLI hook already covered) UNLESS a concurrent
+    process already seeded this key.
+
+    `state` is `run()`'s startup-loaded in-memory snapshot — only THIS
+    module's own txn-wrapped writes update it after that, never a re-read,
+    so it can go stale mid-run relative to disk. `backfill()` is a separate
+    one-shot process that can seed an offset for a path we're only
+    discovering NOW, between our startup load and this rescan tick. Without
+    the fresh on-disk re-read below, a newly-discovered key not yet in the
+    stale in-memory `state` would seek-to-end and silently skip every event
+    between backfill's offset and the file's current end — a real audit gap
+    (flagged post-merge 832c4f9). Re-reading on-disk state under lock right
+    before the seek-to-end decision — scoped to just this tick's
+    newly-discovered paths, not every poll tick — closes it."""
+    new_paths = [p for p in _PROJECTS_DIR.glob("**/*.jsonl") if str(p) not in tracked]
+    if not new_paths:
+        return
+    with _state_txn() as disk_state:
+        for k, v in disk_state.items():
+            if k not in state:
+                state[k] = v
+    for p in new_paths:
+        key = str(p)
+        if key in tracked:
+            continue
+        tracked[key] = p
+        if key not in state:
+            try:
+                state[key] = p.stat().st_size
+            except OSError:
+                state[key] = 0
+
+
 def run() -> None:
     lock = _acquire_run_lock()
     if lock is None:
@@ -642,19 +678,7 @@ def run() -> None:
             last_reconcile = now
         if now - last_rescan > _RESCAN_INTERVAL_SEC:
             if _PROJECTS_DIR.is_dir():
-                for p in _PROJECTS_DIR.glob("**/*.jsonl"):
-                    key = str(p)
-                    if key not in tracked:
-                        tracked[key] = p
-                        # First-ever discovery: seek to END so we only pick up
-                        # NEW assistant messages, never backfill (audit-safe —
-                        # backfill would duplicate old messages already viewed
-                        # from older CLI hooks).
-                        if key not in state:
-                            try:
-                                state[key] = p.stat().st_size
-                            except OSError:
-                                state[key] = 0
+                _rescan_new_transcripts(state, tracked)
             last_rescan = now
 
         updated: dict[str, int] = {}
