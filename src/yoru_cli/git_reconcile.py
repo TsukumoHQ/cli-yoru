@@ -68,6 +68,17 @@ def _locked_json_txn(path: Path, default: Any) -> Iterator[Any]:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
 
+def git_backfill_done_path() -> Path:
+    """Sibling of `config.git_reconcile_state_path()`, tracking which repos
+    have already run the OPT-IN full-history backfill (slice3). Deliberately
+    separate from `git_reconcile_state_path()`'s last-seen-SHA map: that map
+    is seeded to HEAD at registration (slice2's "discover, don't backfill"
+    posture) *before* a backfill ever runs, so it can't double as a
+    has-this-repo-been-backfilled flag — checking it would make the very
+    first backfill call a no-op."""
+    return config.git_reconcile_state_path().with_name("git-backfill-done.json")
+
+
 def register_repo(repo_path: str) -> None:
     """Adds `repo_path` to the reconciliation registry (idempotent) and
     seeds its last-seen SHA to current HEAD if it's newly registered — same
@@ -88,6 +99,62 @@ def register_repo(repo_path: str) -> None:
     with _locked_json_txn(state_path, {}) as state:
         if repo_path not in state:
             state[repo_path] = head
+
+
+def backfill_repo(repo_path: str, limit: int | None = None) -> int:
+    """OPT-IN full-history backfill (slice3): walks `repo_path`'s git log —
+    the whole thing, or just the last `limit` commits — and spools every
+    commit via the same `build_commit_event`/`_spool` path the hook and
+    slice2 reconciliation use. Never touches `register_repo()`'s default
+    behavior; a caller opts into this explicitly (e.g. `yoru init
+    --backfill-git`).
+
+    Idempotent per repo: tracked in `git_backfill_done_path()`, separate
+    from the reconcile state, so re-running (accidentally or deliberately)
+    is a no-op rather than re-spooling the whole history again — the
+    dashboard-level dedup (entry_uuid) would make a re-spool harmless
+    either way, but there's no reason to redo the git-log walk and refill
+    the spool dir for nothing.
+
+    Also registers the repo for ongoing slice2 reconciliation (if not
+    already) and advances its last-seen SHA to HEAD, so the normal
+    hook/reconcile paths pick up cleanly from here afterward — a backfilled
+    repo behaves exactly like a freshly-registered one going forward."""
+    if not os.path.isdir(repo_path):
+        return 0
+    head = _run_git(["rev-parse", "HEAD"], repo_path)
+    if head is None:
+        return 0
+
+    done_path = git_backfill_done_path()
+    with _locked_json_txn(done_path, {}) as done:
+        if done.get(repo_path) is not None:
+            return 0  # already backfilled — no-op
+
+        args = ["rev-list", "--reverse"]
+        if limit is not None:
+            args.append(f"--max-count={limit}")
+        args.append(head)
+        rev_list = _run_git(args, repo_path)
+        shas = rev_list.splitlines() if rev_list else []
+
+        spooled = 0
+        for sha in shas:
+            event = build_commit_event(sha, repo_path)
+            if event is not None:
+                _spool(event)
+                spooled += 1
+        done[repo_path] = head
+
+    repos_path = config.git_repos_path()
+    with _locked_json_txn(repos_path, []) as repos:
+        if repo_path not in repos:
+            repos.append(repo_path)
+    state_path = config.git_reconcile_state_path()
+    with _locked_json_txn(state_path, {}) as state:
+        state[repo_path] = head
+
+    return spooled
 
 
 def reconcile_repo(repo_path: str) -> int:

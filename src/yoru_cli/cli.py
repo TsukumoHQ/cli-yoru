@@ -65,6 +65,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Don't try to auto-open the pairing URL in a browser.",
     )
     p_init.add_argument("--force", action="store_true", help="Overwrite an existing install.")
+    p_init.add_argument(
+        "--backfill-git",
+        action="store_true",
+        help="OPT-IN: also walk this repo's full pre-existing git history "
+             "and spool it (in addition to the normal from-here-on capture). "
+             "Off by default — see docs/SELF-HOST.md.",
+    )
 
     p_use = subparsers.add_parser(
         "use",

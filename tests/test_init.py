@@ -72,6 +72,63 @@ def test_init_installs_git_hooks_when_run_inside_a_repo(monkeypatch, tmp_path):
         assert "yoru git-hook-run" in hook_path.read_text()
 
 
+def test_init_backfill_git_flag_spools_pre_existing_history(monkeypatch, tmp_path):
+    """AC: the opt-in path — `yoru init --backfill-git` — walks history that
+    predates registration and spools it, reusing the B3 slice1/2 machinery."""
+    import subprocess
+
+    from yoru_cli import config, init_cmd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    repo = tmp_path / "myrepo"
+    repo.mkdir()
+    subprocess.check_call(["git", "init", "-q"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "a@b.c"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    (repo / "a.txt").write_text("commit 1\n")
+    subprocess.check_call(["git", "add", "a.txt"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "-m", "commit 1"], cwd=repo)
+    monkeypatch.chdir(repo)
+
+    args = _args(server="http://fake", token="rcpt_ABC")
+    args.backfill_git = True
+    rc = init_cmd.run(args)
+    assert rc == 0
+
+    spool_dir = config.git_spool_dir()
+    events = list(spool_dir.glob("*.json"))
+    assert len(events) == 1
+
+
+def test_init_without_backfill_git_flag_does_not_backfill(monkeypatch, tmp_path):
+    """Default `yoru init` (no --backfill-git) stays unchanged — no history
+    is spooled, matching register_repo()'s existing "discover, don't
+    backfill" posture."""
+    import subprocess
+
+    from yoru_cli import config, init_cmd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    repo = tmp_path / "myrepo"
+    repo.mkdir()
+    subprocess.check_call(["git", "init", "-q"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "a@b.c"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    (repo / "a.txt").write_text("commit 1\n")
+    subprocess.check_call(["git", "add", "a.txt"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "-m", "commit 1"], cwd=repo)
+    monkeypatch.chdir(repo)
+
+    rc = init_cmd.run(_args(server="http://fake", token="rcpt_ABC"))
+    assert rc == 0
+
+    spool_dir = config.git_spool_dir()
+    events = list(spool_dir.glob("*.json")) if spool_dir.is_dir() else []
+    assert events == []
+
+
 def test_init_outside_a_git_repo_skips_git_hooks(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     from yoru_cli import init_cmd

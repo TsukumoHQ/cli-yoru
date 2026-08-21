@@ -303,5 +303,13 @@ def run(args: argparse.Namespace) -> int:
         # later.
         git_reconcile.register_repo(str(root))
 
+        # OPT-IN full-history backfill (B3 slice3) — only when the user
+        # explicitly asked with --backfill-git. Independent of whether
+        # register_repo() above already ran; backfill_repo() is idempotent
+        # per repo on its own marker, so this never double-walks.
+        if getattr(args, "backfill_git", False):
+            spooled = git_reconcile.backfill_repo(str(root))
+            print(f"✓ git backfill → {spooled} pre-existing commit(s) queued from {root}")
+
     print("Next: run Claude Code normally; first event streams to /sessions/events.")
     return 0

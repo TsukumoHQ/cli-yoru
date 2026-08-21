@@ -226,6 +226,109 @@ def test_reconcile_all_one_deleted_repo_does_not_block_the_rest(tmp_path, monkey
     assert events[0]["entry_uuid"] == f"git-commit-{sha2}"
 
 
+def test_backfill_repo_populates_pre_existing_history(tmp_path, monkeypatch):
+    """The slice3 AC's core scenario: history predating registration (the
+    exact history slice2's register_repo() deliberately skips) is pulled in
+    by the opt-in backfill."""
+    from yoru_cli import config, git_reconcile
+
+    repo = _init_repo_with_identity(tmp_path, monkeypatch)
+    sha1 = _commit(repo, "a.txt", "commit 1")
+    sha2 = _commit(repo, "b.txt", "commit 2")
+
+    spooled = git_reconcile.backfill_repo(str(repo))
+    assert spooled == 2
+
+    events = _spool_events(config.git_spool_dir())
+    uuids = [e["entry_uuid"] for e in events]
+    assert uuids == [f"git-commit-{sha1}", f"git-commit-{sha2}"]
+
+    # Leaves the repo registered + caught up to HEAD, same posture as
+    # register_repo(), so the normal hook/reconcile paths pick up cleanly.
+    repos = json.loads(config.git_repos_path().read_text())
+    assert repos == [str(repo)]
+    state = json.loads(config.git_reconcile_state_path().read_text())
+    assert state[str(repo)] == _head_sha(repo)
+
+
+def test_backfill_repo_respects_limit(tmp_path, monkeypatch):
+    from yoru_cli import config, git_reconcile
+
+    repo = _init_repo_with_identity(tmp_path, monkeypatch)
+    _commit(repo, "a.txt", "commit 1")
+    _commit(repo, "b.txt", "commit 2")
+    sha3 = _commit(repo, "c.txt", "commit 3")
+
+    spooled = git_reconcile.backfill_repo(str(repo), limit=1)
+    assert spooled == 1
+
+    events = _spool_events(config.git_spool_dir())
+    assert [e["entry_uuid"] for e in events] == [f"git-commit-{sha3}"]
+
+
+def test_default_init_path_still_does_not_backfill(tmp_path, monkeypatch):
+    """AC: default `yoru init` / register_repo() behavior is unchanged —
+    only the explicit backfill_repo() call pulls in pre-existing history."""
+    from yoru_cli import config, git_reconcile
+
+    repo = _init_repo_with_identity(tmp_path, monkeypatch)
+    _commit(repo, "a.txt", "commit 1")
+    _commit(repo, "b.txt", "commit 2")
+
+    git_reconcile.register_repo(str(repo))  # the default path, no backfill flag
+
+    assert _spool_events(config.git_spool_dir()) == []
+    state = json.loads(config.git_reconcile_state_path().read_text())
+    assert state[str(repo)] == _head_sha(repo)
+
+
+def test_backfill_repo_rerun_does_not_duplicate(tmp_path, monkeypatch):
+    from yoru_cli import config, git_reconcile
+
+    repo = _init_repo_with_identity(tmp_path, monkeypatch)
+    _commit(repo, "a.txt", "commit 1")
+    _commit(repo, "b.txt", "commit 2")
+
+    first = git_reconcile.backfill_repo(str(repo))
+    assert first == 2
+
+    second = git_reconcile.backfill_repo(str(repo))
+    assert second == 0  # already backfilled — no-op, no re-walk/re-spool
+
+    events = _spool_events(config.git_spool_dir())
+    assert len(events) == 2  # unchanged by the second call
+
+
+def test_backfill_repo_then_reconcile_only_sees_commits_made_after(tmp_path, monkeypatch):
+    """Backfilled repos behave exactly like a freshly-registered one
+    afterward: normal reconciliation only picks up commits made from here on."""
+    from yoru_cli import config, git_reconcile
+
+    repo = _init_repo_with_identity(tmp_path, monkeypatch)
+    _commit(repo, "a.txt", "commit 1")
+
+    assert git_reconcile.backfill_repo(str(repo)) == 1
+    assert git_reconcile.reconcile_repo(str(repo)) == 0  # nothing new yet
+
+    sha2 = _commit(repo, "b.txt", "commit 2 (hook skipped)")
+    assert git_reconcile.reconcile_repo(str(repo)) == 1
+
+    events = _spool_events(config.git_spool_dir())
+    assert events[-1]["entry_uuid"] == f"git-commit-{sha2}"
+
+
+def test_backfill_repo_deleted_repo_returns_zero_no_crash(tmp_path, monkeypatch):
+    from yoru_cli import git_reconcile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from yoru_cli import config
+
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+
+    gone = tmp_path / "never-existed"
+    assert git_reconcile.backfill_repo(str(gone)) == 0
+
+
 def test_hook_path_and_reconcile_path_produce_identical_entry_uuid(tmp_path, monkeypatch):
     """The dedup mechanism itself (AC #2): the post-commit hook and the
     reconciliation walk must stamp the SAME entry_uuid for the same commit
