@@ -44,6 +44,12 @@ _PROJECTS_DIR = Path.home() / ".claude/projects"
 # effect on the tailer's NEXT start, not live (restart-to-switch).
 _STATE_PATH = config.tail_state_path()
 _STATE_LOCK_PATH = _STATE_PATH.with_name(_STATE_PATH.name + ".lock")
+_METRICS_PATH = config.tail_metrics_path()
+_METRICS_LOCK_PATH = _METRICS_PATH.with_name(_METRICS_PATH.name + ".lock")
+# Bounds _drain_file's per-read memory to this regardless of how large the
+# unread remainder is (a long-idle tailer catching up on a multi-GB
+# transcript used to `.read()` the WHOLE remainder in one call — #1).
+_DRAIN_CHUNK_SIZE = 1 << 20  # 1 MiB
 # NOT identity-scoped, deliberately: this guards against two tailer
 # PROCESSES on the same $HOME regardless of which identity either has
 # active — transcripts are machine-wide, not per-identity, so only one
@@ -104,6 +110,84 @@ def _state_txn() -> Iterator[dict[str, int]]:
             _save_state(state)
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _load_metrics() -> dict[str, Any]:
+    if not _METRICS_PATH.exists():
+        return {}
+    try:
+        with open(_METRICS_PATH) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_metrics(metrics: dict[str, Any]) -> None:
+    _METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _METRICS_PATH.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(metrics, f)
+    tmp.replace(_METRICS_PATH)
+
+
+@contextlib.contextmanager
+def _metrics_txn() -> Iterator[dict[str, Any]]:
+    """Locked read-modify-write over tail-metrics.json — same fcntl pattern
+    as `_state_txn`, independent lock file so metrics writes never contend
+    with tail-state.json's offset writes."""
+    _METRICS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_METRICS_LOCK_PATH, "w") as lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            metrics = _load_metrics()
+            yield metrics
+            _save_metrics(metrics)
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _record_post_success() -> None:
+    with _metrics_txn() as m:
+        m["last_post_ts"] = time.time()
+
+
+def _record_post_error() -> None:
+    with _metrics_txn() as m:
+        m["last_error_ts"] = time.time()
+        m["error_count"] = int(m.get("error_count", 0)) + 1
+
+
+def read_status() -> dict[str, Any]:
+    """Tailer observability snapshot for `yoru doctor` (029e87c3).
+
+    Returns (all keys optional — absent if the tailer has never run):
+      running          bool  — another process currently holds the run-lock
+      last_post_ts     float | None  — epoch seconds of the last successful POST
+      last_error_ts    float | None  — epoch seconds of the last failed POST
+      error_count      int   — cumulative POST failures across the tailer's life
+    """
+    running = False
+    fh = None
+    try:
+        fh = open(_RUN_LOCK_PATH, "w")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Acquired it ourselves → nobody else was holding it.
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError as e:
+        if e.errno in (errno.EACCES, errno.EAGAIN):
+            running = True
+        # Any other OSError (e.g. the parent dir doesn't exist yet — never
+        # run) just means "never run" — leave running=False.
+    finally:
+        if fh is not None:
+            fh.close()
+    metrics = _load_metrics()
+    return {
+        "running": running,
+        "last_post_ts": metrics.get("last_post_ts"),
+        "last_error_ts": metrics.get("last_error_ts"),
+        "error_count": int(metrics.get("error_count", 0)),
+    }
 
 
 def _acquire_run_lock() -> object | None:
@@ -378,41 +462,79 @@ def _drain_file(
     path stayed tracked forever and printed an ENOENT line EVERY poll —
     one deleted file ≈ 86k log lines/day, and a fleet of them once grew
     the launchd log to 75 GB.
+
+    Streamed in `_DRAIN_CHUNK_SIZE` reads (#1) — a tailer catching up after
+    being off for a while (or backfilling a long-idle transcript) used to
+    `.read()` the ENTIRE unread remainder into memory in one call before
+    processing a single line; a multi-GB transcript meant a multi-GB
+    allocation. This bounds per-read memory to one chunk plus at most one
+    pending partial line, same spirit as `backfill()`'s line-at-a-time
+    `for line in f`.
     """
     try:
-        with open(path, "rb") as f:
-            f.seek(offset)
-            remainder = f.read()
+        f = open(path, "rb")
     except FileNotFoundError:
         return None
     except OSError as e:
         print(f"[tailer] read {path}: {e}", file=sys.stderr)
         return offset
-    if not remainder:
-        return offset
+
     # Advance the offset one complete line at a time, and ONLY past lines whose
     # events all POST successfully. On a failure (backend down) we stop and
     # return the offset at the start of the failed line, so the next poll
     # re-reads from there once the backend recovers — no event is ever lost.
-    pos = offset
-    buf = remainder
-    while True:
-        nl = buf.find(b"\n")
-        if nl == -1:
-            break  # no complete line yet — wait for more
-        line_bytes = buf[: nl + 1]
-        line = line_bytes.decode("utf-8", errors="replace").strip()
-        if line:
-            ok = True
-            for ev in _iter_assistant_events(line):
-                if not _post(server, token, ev):
-                    ok = False
-                    break
-            if not ok:
-                return pos  # leave offset before the un-acked line
-        pos += len(line_bytes)
-        buf = buf[nl + 1 :]
-    return pos
+    posted = False
+    errored = False
+    try:
+        try:
+            f.seek(offset)
+        except OSError as e:
+            print(f"[tailer] read {path}: {e}", file=sys.stderr)
+            return offset
+        pos = offset
+        pending = b""
+        while True:
+            try:
+                chunk = f.read(_DRAIN_CHUNK_SIZE)
+            except OSError as e:
+                print(f"[tailer] read {path}: {e}", file=sys.stderr)
+                return offset  # unread bytes already merged into `pending` are
+                # never POSTed — return the ORIGINAL offset (not `pos`), same
+                # "keep the offset, don't evict" contract as the open()-time
+                # OSError branch above; a mid-read error (e.g. permission
+                # revoked) shouldn't advance past partially-read data.
+            pending += chunk
+            while True:
+                nl = pending.find(b"\n")
+                if nl == -1:
+                    break  # no complete line yet — wait for more
+                line_bytes = pending[: nl + 1]
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if line:
+                    ok = True
+                    for ev in _iter_assistant_events(line):
+                        if _post(server, token, ev):
+                            posted = True
+                        else:
+                            ok = False
+                            errored = True
+                            break
+                    if not ok:
+                        return pos  # leave offset before the un-acked line
+                pos += len(line_bytes)
+                pending = pending[nl + 1 :]
+            if len(chunk) < _DRAIN_CHUNK_SIZE:
+                # Short read (including empty) — reached EOF this call. Any
+                # bytes left in `pending` are an incomplete trailing line
+                # (no newline yet); leave them unconsumed for the next poll.
+                break
+        return pos
+    finally:
+        f.close()
+        if posted:
+            _record_post_success()
+        if errored:
+            _record_post_error()
 
 
 def run() -> None:

@@ -137,3 +137,161 @@ def test_load_config_raises_when_no_active_identity(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("HOME", str(tmp_path))
     with pytest.raises(FileNotFoundError):
         tt._load_config()
+
+
+# ---------- Streamed drain (#1) ----------
+
+def _patch_metrics_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_METRICS_PATH", tmp_path / "tail-metrics.json")
+    monkeypatch.setattr(tt, "_METRICS_LOCK_PATH", tmp_path / "tail-metrics.json.lock")
+
+
+def _stub_one_event_per_line(monkeypatch, posted: list) -> None:
+    """Replace `_iter_assistant_events` with a stub yielding one synthetic
+    event per line, and `_post` with a fake that records (server, event) and
+    always succeeds — decouples the drain-loop/chunking tests from real
+    Claude Code JSONL shape."""
+    monkeypatch.setattr(tt, "_iter_assistant_events", lambda line: [{"line": line}])
+    def _fake_post(server, token, event):
+        posted.append(event["line"])
+        return True
+    monkeypatch.setattr(tt, "_post", _fake_post)
+
+
+def test_drain_file_streams_across_many_chunk_boundaries(tmp_path: Path, monkeypatch) -> None:
+    """Force a tiny chunk size so a realistic-sized remainder spans dozens of
+    reads — the streamed drain must still split on newlines correctly and
+    land on the exact same final offset/event order as a single `.read()`
+    would have, proving the chunking introduced no data loss/duplication."""
+    monkeypatch.setattr(tt, "_DRAIN_CHUNK_SIZE", 16)  # tiny — forces many reads
+    _patch_metrics_paths(tmp_path, monkeypatch)
+    posted: list = []
+    _stub_one_event_per_line(monkeypatch, posted)
+
+    lines = [f"line-{i:03d} payload data here" for i in range(50)]
+    p = tmp_path / "big.jsonl"
+    p.write_text("\n".join(lines) + "\n")
+
+    new_offset = tt._drain_file(p, 0, "http://x", "tok")
+    assert new_offset == p.stat().st_size
+    assert posted == lines
+
+    # Re-draining from EOF is a no-op — nothing re-posted.
+    posted.clear()
+    assert tt._drain_file(p, new_offset, "http://x", "tok") == new_offset
+    assert posted == []
+
+
+def test_drain_file_leaves_incomplete_trailing_line_for_next_poll(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(tt, "_DRAIN_CHUNK_SIZE", 8)
+    _patch_metrics_paths(tmp_path, monkeypatch)
+    posted: list = []
+    _stub_one_event_per_line(monkeypatch, posted)
+
+    p = tmp_path / "partial.jsonl"
+    p.write_text("complete-line\nno-newline-yet")  # trailing line has no \n
+
+    offset = tt._drain_file(p, 0, "http://x", "tok")
+    assert posted == ["complete-line"]
+    assert offset == len("complete-line\n")  # stops before the partial line
+
+    # The writer finishes the line later — next poll picks it up from offset.
+    with open(p, "a") as f:
+        f.write(" finished\n")
+    offset2 = tt._drain_file(p, offset, "http://x", "tok")
+    assert posted == ["complete-line", "no-newline-yet finished"]
+    assert offset2 == p.stat().st_size
+
+
+def test_drain_file_stops_at_failed_post_mid_stream(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_DRAIN_CHUNK_SIZE", 8)
+    _patch_metrics_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(tt, "_iter_assistant_events", lambda line: [{"line": line}])
+
+    posted: list = []
+    def _flaky_post(server, token, event):
+        if event["line"] == "bad":
+            return False
+        posted.append(event["line"])
+        return True
+    monkeypatch.setattr(tt, "_post", _flaky_post)
+
+    p = tmp_path / "flaky.jsonl"
+    p.write_text("good1\ngood2\nbad\ngood3\n")
+
+    offset = tt._drain_file(p, 0, "http://x", "tok")
+    assert posted == ["good1", "good2"]
+    # Offset parked exactly before "bad" — never advances past an un-acked line.
+    assert offset == len("good1\ngood2\n")
+    assert tt._load_metrics()["error_count"] == 1
+
+
+# ---------- Tailer observability (#4) ----------
+
+def test_metrics_recorded_on_successful_drain(tmp_path: Path, monkeypatch) -> None:
+    _patch_metrics_paths(tmp_path, monkeypatch)
+    posted: list = []
+    _stub_one_event_per_line(monkeypatch, posted)
+
+    p = tmp_path / "s.jsonl"
+    p.write_text("one\ntwo\n")
+    before = tt._load_metrics()
+    assert before == {}
+
+    tt._drain_file(p, 0, "http://x", "tok")
+    after = tt._load_metrics()
+    assert "last_post_ts" in after
+    assert after.get("error_count", 0) == 0
+
+
+def test_metrics_untouched_when_nothing_new_to_post(tmp_path: Path, monkeypatch) -> None:
+    """A poll tick with no new bytes shouldn't bump last_post_ts — that
+    field means "tailer confirmed activity", not "tailer polled"."""
+    _patch_metrics_paths(tmp_path, monkeypatch)
+    posted: list = []
+    _stub_one_event_per_line(monkeypatch, posted)
+
+    p = tmp_path / "empty.jsonl"
+    p.write_text("")
+    tt._drain_file(p, 0, "http://x", "tok")
+    assert tt._load_metrics() == {}
+
+
+def test_read_status_reports_not_running_and_no_history(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    status = tt.read_status()
+    assert status == {
+        "running": False, "last_post_ts": None, "last_error_ts": None, "error_count": 0,
+    }
+
+
+def test_read_status_reports_running_when_lock_held(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    held = tt._acquire_run_lock()
+    assert held is not None
+    try:
+        assert tt.read_status()["running"] is True
+    finally:
+        held.close()
+
+    assert tt.read_status()["running"] is False
+
+
+def test_read_status_surfaces_last_post_and_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    _patch_metrics_paths(tmp_path, monkeypatch)
+
+    tt._record_post_success()
+    tt._record_post_error()
+    tt._record_post_error()
+
+    status = tt.read_status()
+    assert status["last_post_ts"] is not None
+    assert status["last_error_ts"] is not None
+    assert status["error_count"] == 2

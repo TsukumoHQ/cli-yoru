@@ -63,3 +63,64 @@ def test_doctor_revoked_token_points_to_rotate_not_init_force(monkeypatch, tmp_p
     assert rc == 3
     assert "yoru rotate" in err
     assert "init --force" not in err
+
+
+def _run_to_success(monkeypatch, tmp_path) -> None:
+    """Fresh install through hook-installed — every stage before tailer
+    status passes, so doctor reaches stage 5."""
+    from yoru_cli import config, doctor_cmd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config.save({"server": "http://fake", "token": "rcpt_test_abcd"})
+
+    def fake_get(url: str, **kwargs):
+        if url.endswith("/health/ready"):
+            return _FakeResponse(200)
+        if url.endswith("/auth/hook-tokens"):
+            return _FakeResponse(200)
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr(doctor_cmd.httpx, "get", fake_get)
+
+    hook = doctor_cmd._hook_path()
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/bin/sh\n")
+    hook.chmod(0o755)
+
+
+def test_doctor_reports_tailer_never_run(monkeypatch, tmp_path, capsys):
+    _run_to_success(monkeypatch, tmp_path)
+    from yoru_cli import doctor_cmd, transcript_tailer
+
+    monkeypatch.setattr(transcript_tailer, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    monkeypatch.setattr(transcript_tailer, "_METRICS_PATH", tmp_path / "tail-metrics.json")
+    monkeypatch.setattr(
+        transcript_tailer, "_METRICS_LOCK_PATH", tmp_path / "tail-metrics.json.lock"
+    )
+
+    rc = doctor_cmd.run(_args())
+    out = capsys.readouterr().out
+    assert rc == 0  # tailer absence never fails doctor
+    assert "tailer not running" in out
+
+
+def test_doctor_reports_tailer_running_with_recent_activity(monkeypatch, tmp_path, capsys):
+    _run_to_success(monkeypatch, tmp_path)
+    from yoru_cli import doctor_cmd, transcript_tailer
+
+    monkeypatch.setattr(transcript_tailer, "_RUN_LOCK_PATH", tmp_path / "tailer.run.lock")
+    monkeypatch.setattr(transcript_tailer, "_METRICS_PATH", tmp_path / "tail-metrics.json")
+    monkeypatch.setattr(
+        transcript_tailer, "_METRICS_LOCK_PATH", tmp_path / "tail-metrics.json.lock"
+    )
+    held = transcript_tailer._acquire_run_lock()
+    transcript_tailer._record_post_success()
+    try:
+        rc = doctor_cmd.run(_args())
+    finally:
+        held.close()
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "✓ tailer running" in out
+    assert "last event" in out

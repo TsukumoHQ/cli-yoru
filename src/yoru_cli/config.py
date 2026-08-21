@@ -232,3 +232,17 @@ def tail_state_path() -> Path:
     if identity_id is None:
         return _root_dir() / "tail-state.json"
     return _slot_dir(identity_id) / "tail-state.json"
+
+
+def tail_metrics_path() -> Path:
+    """~/.config/yoru/identities/<active>/tail-metrics.json — tailer
+    observability (last-successful-post timestamp + error counter), read by
+    `yoru doctor` (029e87c3). Separate file from tail-state.json: that one's
+    a hot-path `dict[str, int]` (path → byte offset) touched every poll tick
+    per tracked transcript; metrics are a small fixed-shape dict touched only
+    on success/error, and keeping them apart avoids widening tail-state's
+    type or locking contention between the two concerns."""
+    identity_id = active_identity_id()
+    if identity_id is None:
+        return _root_dir() / "tail-metrics.json"
+    return _slot_dir(identity_id) / "tail-metrics.json"
